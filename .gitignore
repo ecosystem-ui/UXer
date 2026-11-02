@@ -1,0 +1,18 @@
+# Node
+node_modules/
+client/dist/
+client/node_modules/
+
+# Go build artifacts
+server/uxer
+server/bin/
+
+# Local data & secrets
+.env
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# OS
+.DS_Store
