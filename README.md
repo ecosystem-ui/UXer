@@ -86,6 +86,43 @@ go build -o uxer ./cmd/uxer
 6. Reply and resolve threads in the side panel. Resolving records the version
    the comment was resolved on; the version list shows open/resolved counts.
 
+## Testing
+
+End-to-end tests use [Playwright](https://playwright.dev) and run the built
+frontend against the Go server on a single port with an isolated SQLite
+database. The sample design URL is
+<https://osac-project.github.io/osac-ux/>.
+
+### Prerequisites
+
+- Go 1.26+ (the server is started by the test runner)
+- Node.js 20+ and npm, with the client dependencies installed (`cd client && npm install`)
+- A Playwright Chromium install (`npm run test:e2e:install`)
+- Outbound network access to `osac-project.github.io` (the server proxies the
+  sample site; the auth/projects/collaboration specs don't require it, but the
+  comment-routing spec does)
+
+### Running
+
+```bash
+npm install                 # installs @playwright/test
+npm run test:e2e            # builds the client, starts the server, runs tests
+npm run test:e2e:headed     # same, but headed for debugging
+```
+
+The Playwright config (`playwright.config.ts`) builds `client/dist`, starts the
+Go server on `:8099` with a throwaway `server/data/e2e.db`, and tears it down
+afterwards.
+
+### Test cases
+
+| Spec | Scenarios covered |
+| --- | --- |
+| `e2e/auth.spec.ts` | Sign up (creates account, lands on Projects), log out, log back in, and reject a wrong password |
+| `e2e/projects.spec.ts` | Create a project, add a persona (version) with a design URL, and share a project with another user |
+| `e2e/collaboration.spec.ts` | Three users; the owner creates two projects (each with a persona) and shares both; all three reply to the same thread; each resolves a different thread |
+| `e2e/comment-routing.spec.ts` | Create a comment in comment mode inside the proxied iframe and verify clicking it opens its thread; verify the manual-fallback error icon and guidance render when a recorded wizard step is gated by validation/required fields |
+
 ## Preview proxy & limitations
 
 The `/proxy?url=…` endpoint fetches the design URL server-side, rewrites

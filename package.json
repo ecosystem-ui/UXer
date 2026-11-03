@@ -1,0 +1,14 @@
+{
+  "name": "uxer",
+  "private": true,
+  "version": "0.1.0",
+  "description": "UXer — Design Review & Version Management (e2e tests)",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:install": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1"
+  }
+}

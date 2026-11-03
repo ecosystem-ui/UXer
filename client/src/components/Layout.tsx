@@ -25,7 +25,12 @@ export default function Layout({ children }: { children: ReactNode }) {
 
   return (
     <>
-      <AppBar position="static" elevation={0} color="default" sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
+      <AppBar
+        position="static"
+        elevation={0}
+        color="default"
+        sx={{ borderBottom: '1px solid', borderColor: 'divider' }}
+      >
         <Toolbar>
           <Typography
             variant="h6"

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
@@ -11,7 +10,7 @@ import (
 
 func (s *Server) handleListVersions(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
-	if _, ok := s.ownedProject(r, projectID); !ok {
+	if !s.canViewProject(r, projectID) {
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
@@ -37,6 +36,10 @@ func (s *Server) handleListVersions(w http.ResponseWriter, r *http.Request) {
 		}
 		versions = append(versions, v)
 	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
 	writeJSON(w, http.StatusOK, versions)
 }
 
@@ -51,7 +54,7 @@ func (s *Server) handleCreateVersion(w http.ResponseWriter, r *http.Request) {
 		Label string `json:"label"`
 		URL   string `json:"url"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeJSON(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
@@ -71,17 +74,33 @@ func (s *Server) handleCreateVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Compute seq atomically inside a transaction so concurrent creates on the
+	// same project cannot collide (enforced by idx_versions_project_seq).
+	tx, err := s.DB.SQL.Begin()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "create failed")
+		return
+	}
+	defer tx.Rollback()
+
 	var maxSeq int
-	_ = s.DB.SQL.QueryRow(
+	if err := tx.QueryRow(
 		`SELECT COALESCE(MAX(seq), 0) FROM versions WHERE project_id = ?`, projectID,
-	).Scan(&maxSeq)
+	).Scan(&maxSeq); err != nil {
+		writeError(w, http.StatusInternalServerError, "create failed")
+		return
+	}
 
 	id := db.NewID()
 	ts := now()
-	if _, err := s.DB.SQL.Exec(
+	if _, err := tx.Exec(
 		`INSERT INTO versions (id, project_id, label, url, seq, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		id, projectID, label, rawURL, maxSeq+1, ts,
 	); err != nil {
+		writeError(w, http.StatusInternalServerError, "create failed")
+		return
+	}
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "create failed")
 		return
 	}
@@ -93,7 +112,7 @@ func (s *Server) handleCreateVersion(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUpdateVersion(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	v, ok := s.versionForUser(r, id)
+	v, ok := s.versionFor(r, id, true)
 	if !ok {
 		writeError(w, http.StatusNotFound, "version not found")
 		return
@@ -103,7 +122,7 @@ func (s *Server) handleUpdateVersion(w http.ResponseWriter, r *http.Request) {
 		Label *string `json:"label"`
 		URL   *string `json:"url"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeJSON(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
@@ -137,7 +156,7 @@ func (s *Server) handleUpdateVersion(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteVersion(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, ok := s.versionForUser(r, id); !ok {
+	if _, ok := s.versionFor(r, id, true); !ok {
 		writeError(w, http.StatusNotFound, "version not found")
 		return
 	}

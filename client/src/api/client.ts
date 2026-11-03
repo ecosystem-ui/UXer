@@ -1,4 +1,4 @@
-import type { User, Project, Version, Comment, Reply, CommentStatus } from './types';
+import type { User, Project, ProjectMember, Version, Comment, Reply, CommentStatus } from './types';
 
 const BASE = '/api';
 
@@ -19,6 +19,7 @@ export interface NewCommentInput {
   selector: string;
   text_excerpt: string;
   page_url: string;
+  step: string;
   x: number;
   y: number;
   body: string;
@@ -47,8 +48,16 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ name }),
     }),
-  deleteProject: (id: string) =>
-    request<{ ok: boolean }>(`/projects/${id}`, { method: 'DELETE' }),
+  deleteProject: (id: string) => request<{ ok: boolean }>(`/projects/${id}`, { method: 'DELETE' }),
+
+  listMembers: (projectId: string) => request<ProjectMember[]>(`/projects/${projectId}/members`),
+  addMember: (projectId: string, email: string) =>
+    request<ProjectMember>(`/projects/${projectId}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+  removeMember: (projectId: string, userId: string) =>
+    request<{ ok: boolean }>(`/projects/${projectId}/members/${userId}`, { method: 'DELETE' }),
 
   listVersions: (projectId: string) => request<Version[]>(`/projects/${projectId}/versions`),
   createVersion: (projectId: string, label: string, url: string) =>
@@ -61,8 +70,7 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(patch),
     }),
-  deleteVersion: (id: string) =>
-    request<{ ok: boolean }>(`/versions/${id}`, { method: 'DELETE' }),
+  deleteVersion: (id: string) => request<{ ok: boolean }>(`/versions/${id}`, { method: 'DELETE' }),
 
   listComments: (versionId: string) => request<Comment[]>(`/versions/${versionId}/comments`),
   createComment: (versionId: string, input: NewCommentInput) =>
@@ -75,7 +83,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ body }),
     }),
-  updateComment: (commentId: string, patch: { status: CommentStatus; resolved_version_id?: string }) =>
+  updateComment: (
+    commentId: string,
+    patch: { status: CommentStatus; resolved_version_id?: string },
+  ) =>
     request<Comment>(`/comments/${commentId}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),

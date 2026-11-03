@@ -18,11 +18,10 @@ type Manager struct {
 	store sessions.Store
 }
 
-func NewManager() *Manager {
-	secret := os.Getenv("SESSION_SECRET")
-	if secret == "" {
-		secret = "dev-insecure-secret-change-me"
-	}
+// NewManager builds a session store keyed by the provided secret. Callers
+// are responsible for supplying a sufficiently long, random secret (see
+// cmd/uxer/main.go for production enforcement).
+func NewManager(secret string) *Manager {
 	return &Manager{store: sessions.NewCookieStore([]byte(secret))}
 }
 

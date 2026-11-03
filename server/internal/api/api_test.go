@@ -31,8 +31,8 @@ func newTestServer(t *testing.T) (*Server, http.Handler, *http.Cookie) {
 		t.Fatalf("insert user: %v", err)
 	}
 
-	mgr := auth.NewManager()
-	srv := NewServer(d, mgr, proxy.NewHandler())
+	mgr := auth.NewManager("test-secret")
+	srv := NewServer(d, mgr, proxy.NewHandler("test-secret"))
 	h := srv.Routes(nil)
 
 	// Issue a session cookie for the test user.
@@ -144,6 +144,71 @@ func TestEndToEndFlow(t *testing.T) {
 	rec = do(h, cookie, http.MethodPatch, "/api/comments/"+comment.ID, `{"status":"open"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reopen comment: %d", rec.Code)
+	}
+}
+
+func TestMemberCanResolveComment(t *testing.T) {
+	srv, h, ownerCookie := newTestServer(t)
+
+	// Add a second user (viewer) to the database.
+	if _, err := srv.DB.SQL.Exec(
+		`INSERT INTO users (id, email, name, password_hash, created_at)
+		 VALUES ('user-2', 'ben@example.com', 'Ben', 'hash', '2026-01-01T00:00:00Z')`,
+	); err != nil {
+		t.Fatalf("insert viewer: %v", err)
+	}
+
+	// Owner creates a project + version + comment.
+	rec := do(h, ownerCookie, http.MethodPost, "/api/projects", `{"name":"Shared"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create project: %d %s", rec.Code, rec.Body.String())
+	}
+	var project db.Project
+	_ = json.Unmarshal(rec.Body.Bytes(), &project)
+
+	rec = do(h, ownerCookie, http.MethodPost, "/api/projects/"+project.ID+"/versions",
+		`{"label":"v1","url":"https://example.com"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create version: %d %s", rec.Code, rec.Body.String())
+	}
+	var version db.Version
+	_ = json.Unmarshal(rec.Body.Bytes(), &version)
+
+	rec = do(h, ownerCookie, http.MethodPost, "/api/versions/"+version.ID+"/comments",
+		`{"selector":"#hero > button","text_excerpt":"Get started","x":0.5,"y":0.5,"body":"Button color is off"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create comment: %d %s", rec.Code, rec.Body.String())
+	}
+	var comment db.Comment
+	_ = json.Unmarshal(rec.Body.Bytes(), &comment)
+
+	// Owner shares the project with the viewer.
+	rec = do(h, ownerCookie, http.MethodPost, "/api/projects/"+project.ID+"/members",
+		`{"email":"ben@example.com"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("add member: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Issue a session cookie for the viewer.
+	viewerRec := httptest.NewRecorder()
+	viewerReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	if err := srv.Auth.SetUserID(viewerRec, viewerReq, "user-2"); err != nil {
+		t.Fatalf("set viewer session: %v", err)
+	}
+	viewerCookies := viewerRec.Result().Cookies()
+	if len(viewerCookies) == 0 {
+		t.Fatal("no viewer session cookie issued")
+	}
+
+	// Viewer (member) can resolve the comment.
+	rec = do(h, viewerCookies[0], http.MethodPatch, "/api/comments/"+comment.ID, `{"status":"resolved"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("viewer resolve comment: %d %s", rec.Code, rec.Body.String())
+	}
+	var resolved db.Comment
+	_ = json.Unmarshal(rec.Body.Bytes(), &resolved)
+	if resolved.Status != "resolved" {
+		t.Fatalf("expected resolved, got %+v", resolved)
 	}
 }
 

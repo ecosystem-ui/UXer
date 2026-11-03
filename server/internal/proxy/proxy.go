@@ -1,8 +1,11 @@
 package proxy
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
 	"errors"
@@ -15,6 +18,11 @@ import (
 	"time"
 )
 
+// maxUpstreamBody caps how much of an upstream response we buffer for
+// rewriting. Beyond this size the request is aborted to protect server
+// memory from unbounded proxied responses.
+const maxUpstreamBody = 16 << 20 // 16 MiB
+
 //go:embed bridge.js
 var bridgeJS []byte
 
@@ -22,9 +30,12 @@ var bridgeJS []byte
 type Handler struct {
 	client *http.Client
 	allow  *allowlist
+	key    []byte // HMAC key for signing route tokens
 }
 
-func NewHandler() *Handler {
+// NewHandler builds a proxy handler. secret is the shared signing key used to
+// authenticate route tokens so clients cannot mint arbitrary proxy paths.
+func NewHandler(secret string) *Handler {
 	allow := newAllowlist(os.Getenv("ALLOW_PRIVATE_HOSTS"))
 	return &Handler{
 		client: &http.Client{
@@ -38,6 +49,7 @@ func NewHandler() *Handler {
 			},
 		},
 		allow: allow,
+		key:   []byte(secret),
 	}
 }
 
@@ -66,7 +78,11 @@ func safeTransport(allow *allowlist) *http.Transport {
 			}
 			return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
 		},
-		TLSHandshakeTimeout: 15 * time.Second,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       90 * time.Second,
 	}
 }
 
@@ -87,7 +103,7 @@ func (h *Handler) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing url parameter", http.StatusBadRequest)
 		return
 	}
-	u, err := validateURL(target, h.allow)
+	u, err := validateURL(r.Context(), target, h.allow)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
@@ -95,7 +111,7 @@ func (h *Handler) HandleProxy(w http.ResponseWriter, r *http.Request) {
 
 	origin := u.Scheme + "://" + u.Host
 	basePath := basePathOf(u)
-	b64 := encodeRoute(origin, basePath)
+	b64 := h.encodeRoute(origin, basePath)
 
 	// Preserve the exact path so the SPA router matches the same route the
 	// user was on. Only the app's base path itself gets a trailing slash,
@@ -124,7 +140,7 @@ func (h *Handler) HandlePath(w http.ResponseWriter, r *http.Request) {
 	b64 := r.PathValue("b64")
 	rest := r.PathValue("rest")
 
-	origin, basePath, err := decodeRoute(b64)
+	origin, basePath, err := h.decodeRoute(b64)
 	if err != nil {
 		http.Error(w, "invalid proxy path", http.StatusBadRequest)
 		return
@@ -135,7 +151,7 @@ func (h *Handler) HandlePath(w http.ResponseWriter, r *http.Request) {
 		target += "?" + q
 	}
 
-	u, err := validateURL(target, h.allow)
+	u, err := validateURL(r.Context(), target, h.allow)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
@@ -201,7 +217,12 @@ func (h *Handler) serveURL(w http.ResponseWriter, r *http.Request, u *url.URL, o
 
 	switch {
 	case mediaType == "text/html":
-		out, rerr := rewriteHTML(body, origin, prefix, proxiedBase, u)
+		raw, over := readLimited(body, maxUpstreamBody)
+		if over {
+			http.Error(w, "upstream response too large", http.StatusBadGateway)
+			return
+		}
+		out, rerr := rewriteHTML(bytes.NewReader(raw), origin, prefix, proxiedBase, u)
 		if rerr != nil {
 			http.Error(w, "rewrite failed", http.StatusBadGateway)
 			return
@@ -210,13 +231,21 @@ func (h *Handler) serveURL(w http.ResponseWriter, r *http.Request, u *url.URL, o
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(out)
 	case isJS:
-		raw, _ := io.ReadAll(body)
+		raw, over := readLimited(body, maxUpstreamBody)
+		if over {
+			http.Error(w, "upstream response too large", http.StatusBadGateway)
+			return
+		}
 		out := rewriteJS(raw, basePath, proxiedBase)
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(out)
 	case mediaType == "text/css":
-		raw, _ := io.ReadAll(body)
+		raw, over := readLimited(body, maxUpstreamBody)
+		if over {
+			http.Error(w, "upstream response too large", http.StatusBadGateway)
+			return
+		}
 		out := []byte(rewriteCSS(string(raw), origin, prefix))
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		w.WriteHeader(resp.StatusCode)
@@ -227,23 +256,57 @@ func (h *Handler) serveURL(w http.ResponseWriter, r *http.Request, u *url.URL, o
 	}
 }
 
-// encodeRoute packs origin and base path into a URL-safe token.
-func encodeRoute(origin, basePath string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(origin + "\n" + basePath))
+// readLimited reads up to limit bytes, returning (nil, true) when the stream
+// exceeds the limit or errors, so callers can abort instead of buffering an
+// unbounded response.
+func readLimited(r io.Reader, limit int64) ([]byte, bool) {
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, true
+	}
+	if int64(len(data)) > limit {
+		return nil, true
+	}
+	return data, false
 }
 
-// decodeRoute unpacks a route token into origin and base path.
-func decodeRoute(b64 string) (origin, basePath string, err error) {
-	raw, err := base64.RawURLEncoding.DecodeString(b64)
+// encodeRoute packs origin and base path into a signed, URL-safe token. The
+// HMAC signature prevents clients from forging arbitrary proxy origins.
+func (h *Handler) encodeRoute(origin, basePath string) string {
+	payload := []byte(origin + "\n" + basePath)
+	mac := hmac.New(sha256.New, h.key)
+	mac.Write(payload)
+	sig := mac.Sum(nil)
+	return base64.RawURLEncoding.EncodeToString(payload) + "." +
+		base64.RawURLEncoding.EncodeToString(sig)
+}
+
+// decodeRoute unpacks and verifies a route token into origin and base path.
+func (h *Handler) decodeRoute(token string) (origin, basePath string, err error) {
+	parts := strings.SplitN(token, ".", 2)
+	if len(parts) != 2 {
+		return "", "", errors.New("malformed route token")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
 		return "", "", err
 	}
-	parts := strings.SplitN(string(raw), "\n", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", "", err
+	}
+	mac := hmac.New(sha256.New, h.key)
+	mac.Write(payload)
+	if !hmac.Equal(sig, mac.Sum(nil)) {
+		return "", "", errors.New("invalid route token signature")
+	}
+
+	segs := strings.SplitN(string(payload), "\n", 2)
+	if len(segs) != 2 || segs[0] == "" || segs[1] == "" {
 		return "", "", errors.New("malformed route token")
 	}
-	if !strings.HasPrefix(parts[0], "http://") && !strings.HasPrefix(parts[0], "https://") {
+	if !strings.HasPrefix(segs[0], "http://") && !strings.HasPrefix(segs[0], "https://") {
 		return "", "", errors.New("malformed route origin")
 	}
-	return parts[0], parts[1], nil
+	return segs[0], segs[1], nil
 }

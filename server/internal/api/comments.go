@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -10,14 +9,14 @@ import (
 
 func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("id")
-	v, ok := s.versionForUser(r, versionID)
+	v, ok := s.versionFor(r, versionID, false)
 	if !ok {
 		writeError(w, http.StatusNotFound, "version not found")
 		return
 	}
 
 	rows, err := s.DB.SQL.Query(
-		`SELECT c.id, c.version_id, c.selector, c.text_excerpt, c.page_url, c.x, c.y, c.body,
+		`SELECT c.id, c.version_id, c.selector, c.text_excerpt, c.page_url, c.step, c.x, c.y, c.body,
 		        c.status, c.author_id, c.created_at, c.resolved_at, c.resolved_version_id,
 		        u.email, u.name
 		 FROM comments c JOIN users u ON u.id = c.author_id
@@ -33,7 +32,7 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var c db.Comment
 		var author db.User
-		if err := rows.Scan(&c.ID, &c.VersionID, &c.Selector, &c.TextExcerpt, &c.PageURL, &c.X, &c.Y, &c.Body,
+		if err := rows.Scan(&c.ID, &c.VersionID, &c.Selector, &c.TextExcerpt, &c.PageURL, &c.Step, &c.X, &c.Y, &c.Body,
 			&c.Status, &c.AuthorID, &c.CreatedAt, &c.ResolvedAt, &c.ResolvedVersionID,
 			&author.Email, &author.Name); err != nil {
 			writeError(w, http.StatusInternalServerError, "scan failed")
@@ -43,6 +42,10 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 		c.Author = &author
 		c.Replies = []db.Reply{}
 		comments = append(comments, c)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
 	}
 
 	if len(comments) > 0 {
@@ -87,12 +90,12 @@ func (s *Server) attachReplies(comments []db.Comment) error {
 			c.Replies = append(c.Replies, r)
 		}
 	}
-	return nil
+	return rows.Err()
 }
 
 func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("id")
-	v, ok := s.versionForUser(r, versionID)
+	v, ok := s.versionFor(r, versionID, false)
 	if !ok {
 		writeError(w, http.StatusNotFound, "version not found")
 		return
@@ -103,11 +106,12 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 		Selector    string  `json:"selector"`
 		TextExcerpt string  `json:"text_excerpt"`
 		PageURL     string  `json:"page_url"`
+		Step        string  `json:"step"`
 		X           float64 `json:"x"`
 		Y           float64 `json:"y"`
 		Body        string  `json:"body"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeJSON(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
@@ -123,9 +127,9 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 	id := db.NewID()
 	ts := now()
 	if _, err := s.DB.SQL.Exec(
-		`INSERT INTO comments (id, version_id, selector, text_excerpt, page_url, x, y, body, status, author_id, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`,
-		id, v.ID, body.Selector, body.TextExcerpt, body.PageURL, body.X, body.Y, strings.TrimSpace(body.Body), u.ID, ts,
+		`INSERT INTO comments (id, version_id, selector, text_excerpt, page_url, step, x, y, body, status, author_id, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`,
+		id, v.ID, body.Selector, body.TextExcerpt, body.PageURL, body.Step, body.X, body.Y, strings.TrimSpace(body.Body), u.ID, ts,
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, "create failed")
 		return
@@ -136,7 +140,7 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateReply(w http.ResponseWriter, r *http.Request) {
 	commentID := r.PathValue("id")
-	c, ok := s.commentForUser(r, commentID)
+	c, ok := s.commentFor(r, commentID, false)
 	if !ok {
 		writeError(w, http.StatusNotFound, "comment not found")
 		return
@@ -146,7 +150,7 @@ func (s *Server) handleCreateReply(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Body string `json:"body"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeJSON(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
@@ -172,17 +176,17 @@ func (s *Server) handleCreateReply(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUpdateComment(w http.ResponseWriter, r *http.Request) {
 	commentID := r.PathValue("id")
-	c, ok := s.commentForUser(r, commentID)
+	c, ok := s.commentFor(r, commentID, false)
 	if !ok {
 		writeError(w, http.StatusNotFound, "comment not found")
 		return
 	}
 
 	var body struct {
-		Status             string `json:"status"`
-		ResolvedVersionID  string `json:"resolved_version_id"`
+		Status            string `json:"status"`
+		ResolvedVersionID string `json:"resolved_version_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeJSON(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
@@ -192,7 +196,7 @@ func (s *Server) handleUpdateComment(w http.ResponseWriter, r *http.Request) {
 		if resolvedVersionID == "" {
 			resolvedVersionID = c.VersionID // default: the version it lives on
 		}
-		if _, ok := s.versionForUser(r, resolvedVersionID); !ok {
+		if _, ok := s.versionFor(r, resolvedVersionID, false); !ok {
 			writeError(w, http.StatusBadRequest, "invalid resolved_version_id")
 			return
 		}
@@ -221,8 +225,20 @@ func (s *Server) handleUpdateComment(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
 	commentID := r.PathValue("id")
-	if _, ok := s.commentForUser(r, commentID); !ok {
+	c, ok := s.commentFor(r, commentID, false)
+	if !ok {
 		writeError(w, http.StatusNotFound, "comment not found")
+		return
+	}
+	// Only the project owner or the comment author may delete a comment. This
+	// makes the "viewer" (collaborator) role consistent: members can create,
+	// reply to, and resolve comments, and may delete their own.
+	isOwner := false
+	if _, ok := s.commentFor(r, commentID, true); ok {
+		isOwner = true
+	}
+	if !isOwner && c.AuthorID != userFrom(r).ID {
+		writeError(w, http.StatusForbidden, "you can only delete your own comments")
 		return
 	}
 	if _, err := s.DB.SQL.Exec(`DELETE FROM comments WHERE id = ?`, commentID); err != nil {
@@ -237,11 +253,11 @@ func (s *Server) loadComment(id string, _ *db.User) *db.Comment {
 	var c db.Comment
 	var author db.User
 	err := s.DB.SQL.QueryRow(
-		`SELECT c.id, c.version_id, c.selector, c.text_excerpt, c.page_url, c.x, c.y, c.body,
+		`SELECT c.id, c.version_id, c.selector, c.text_excerpt, c.page_url, c.step, c.x, c.y, c.body,
 		        c.status, c.author_id, c.created_at, c.resolved_at, c.resolved_version_id,
 		        u.email, u.name
 		 FROM comments c JOIN users u ON u.id = c.author_id WHERE c.id = ?`, id,
-	).Scan(&c.ID, &c.VersionID, &c.Selector, &c.TextExcerpt, &c.PageURL, &c.X, &c.Y, &c.Body,
+	).Scan(&c.ID, &c.VersionID, &c.Selector, &c.TextExcerpt, &c.PageURL, &c.Step, &c.X, &c.Y, &c.Body,
 		&c.Status, &c.AuthorID, &c.CreatedAt, &c.ResolvedAt, &c.ResolvedVersionID,
 		&author.Email, &author.Name)
 	if err != nil {

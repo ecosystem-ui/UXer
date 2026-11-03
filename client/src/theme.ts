@@ -45,8 +45,7 @@ export const darkTokens: Tokens = {
   ink: '#475569',
 };
 
-export const tokensFor = (mode: ColorMode): Tokens =>
-  mode === 'dark' ? darkTokens : lightTokens;
+export const tokensFor = (mode: ColorMode): Tokens => (mode === 'dark' ? darkTokens : lightTokens);
 
 export function createAppTheme(mode: ColorMode): Theme {
   const t = tokensFor(mode);

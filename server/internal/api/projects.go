@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -11,8 +10,14 @@ import (
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r)
 	rows, err := s.DB.SQL.Query(
-		`SELECT id, name, owner_id, created_at, updated_at
-		 FROM projects WHERE owner_id = ? ORDER BY updated_at DESC`, u.ID,
+		`SELECT p.id, p.name, p.owner_id, ou.name, p.created_at, p.updated_at,
+		        CASE WHEN p.owner_id = ? THEN 'owner' ELSE COALESCE(m.role, 'viewer') END AS role
+		 FROM projects p
+		 JOIN users ou ON ou.id = p.owner_id
+		 LEFT JOIN project_members m ON m.project_id = p.id AND m.user_id = ?
+		 WHERE p.owner_id = ? OR m.user_id = ?
+		 ORDER BY p.updated_at DESC`,
+		u.ID, u.ID, u.ID, u.ID,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
@@ -23,11 +28,15 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 	projects := []db.Project{}
 	for rows.Next() {
 		var p db.Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.OwnerID, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.OwnerID, &p.OwnerName, &p.CreatedAt, &p.UpdatedAt, &p.Role); err != nil {
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}
 		projects = append(projects, p)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
 	}
 	writeJSON(w, http.StatusOK, projects)
 }
@@ -37,7 +46,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeJSON(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
@@ -63,18 +72,21 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, ok := s.ownedProject(r, id); !ok {
+	role := s.projectRole(r, id)
+	if role == "" {
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
 	var p db.Project
 	err := s.DB.SQL.QueryRow(
-		`SELECT id, name, owner_id, created_at, updated_at FROM projects WHERE id = ?`, id,
-	).Scan(&p.ID, &p.Name, &p.OwnerID, &p.CreatedAt, &p.UpdatedAt)
+		`SELECT p.id, p.name, p.owner_id, ou.name, p.created_at, p.updated_at
+		 FROM projects p JOIN users ou ON ou.id = p.owner_id WHERE p.id = ?`, id,
+	).Scan(&p.ID, &p.Name, &p.OwnerID, &p.OwnerName, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
+	p.Role = role
 	writeJSON(w, http.StatusOK, p)
 }
 
@@ -87,7 +99,7 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeJSON(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
@@ -113,6 +125,106 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := s.DB.SQL.Exec(`DELETE FROM projects WHERE id = ?`, id); err != nil {
 		writeError(w, http.StatusInternalServerError, "delete failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleListMembers lists the non-owner members (viewers) of a project.
+// Owner-only: only the project owner may manage sharing.
+func (s *Server) handleListMembers(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	if _, ok := s.ownedProject(r, projectID); !ok {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	rows, err := s.DB.SQL.Query(
+		`SELECT m.user_id, u.email, u.name, m.role, m.created_at
+		 FROM project_members m JOIN users u ON u.id = m.user_id
+		 WHERE m.project_id = ? ORDER BY m.created_at ASC`, projectID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	defer rows.Close()
+
+	members := []db.ProjectMember{}
+	for rows.Next() {
+		var m db.ProjectMember
+		if err := rows.Scan(&m.UserID, &m.Email, &m.Name, &m.Role, &m.CreatedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "scan failed")
+			return
+		}
+		members = append(members, m)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, members)
+}
+
+// handleAddMember shares a project with an existing user (by email) as a
+// viewer. Owner-only.
+func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	ownerID, ok := s.ownedProject(r, projectID)
+	if !ok {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+
+	var body struct {
+		Email string `json:"email"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	email := strings.ToLower(strings.TrimSpace(body.Email))
+	if email == "" {
+		writeError(w, http.StatusBadRequest, "email is required")
+		return
+	}
+
+	var userID, name string
+	err := s.DB.SQL.QueryRow(`SELECT id, name FROM users WHERE email = ?`, email).Scan(&userID, &name)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "no user with that email")
+		return
+	}
+	if userID == ownerID {
+		writeError(w, http.StatusBadRequest, "owner is already a member")
+		return
+	}
+
+	ts := now()
+	if _, err := s.DB.SQL.Exec(
+		`INSERT INTO project_members (project_id, user_id, role, created_at) VALUES (?, ?, 'viewer', ?)
+		 ON CONFLICT(project_id, user_id) DO UPDATE SET role = excluded.role`,
+		projectID, userID, ts,
+	); err != nil {
+		writeError(w, http.StatusInternalServerError, "add member failed")
+		return
+	}
+	writeJSON(w, http.StatusCreated, db.ProjectMember{
+		UserID: userID, Email: email, Name: name, Role: "viewer", CreatedAt: ts,
+	})
+}
+
+// handleRemoveMember revokes a member's access to a project. Owner-only.
+func (s *Server) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	userID := r.PathValue("userId")
+	if _, ok := s.ownedProject(r, projectID); !ok {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if _, err := s.DB.SQL.Exec(
+		`DELETE FROM project_members WHERE project_id = ? AND user_id = ?`, projectID, userID,
+	); err != nil {
+		writeError(w, http.StatusInternalServerError, "remove member failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

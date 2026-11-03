@@ -28,8 +28,18 @@ type Project struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	OwnerID   string `json:"owner_id"`
+	OwnerName string `json:"owner_name,omitempty"`
+	Role      string `json:"role,omitempty"` // current user's role: "owner" | "viewer"
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
+}
+
+type ProjectMember struct {
+	UserID    string `json:"user_id"`
+	Email     string `json:"email"`
+	Name      string `json:"name"`
+	Role      string `json:"role"`
+	CreatedAt string `json:"created_at"`
 }
 
 type Version struct {
@@ -58,6 +68,7 @@ type Comment struct {
 	Selector          string  `json:"selector"`
 	TextExcerpt       string  `json:"text_excerpt"`
 	PageURL           string  `json:"page_url"`
+	Step              string  `json:"step"`
 	X                 float64 `json:"x"`
 	Y                 float64 `json:"y"`
 	Body              string  `json:"body"`

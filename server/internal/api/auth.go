@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -35,7 +34,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 		Name     string `json:"name"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeJSON(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
@@ -73,6 +72,12 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		`INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)`,
 		id, email, name, hash, ts,
 	); err != nil {
+		// The UNIQUE(email) constraint catches a concurrent signup with the
+		// same email that slipped past the pre-check.
+		if db.IsUniqueViolation(err) {
+			writeError(w, http.StatusConflict, "an account with this email already exists")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to create account")
 		return
 	}
@@ -90,7 +95,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeJSON(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}

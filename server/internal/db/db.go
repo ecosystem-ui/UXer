@@ -2,11 +2,12 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
-	_ "modernc.org/sqlite"
+	sqlite "modernc.org/sqlite"
 )
 
 // DB wraps the SQLite handle and owns migrations.
@@ -49,4 +50,17 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	return d, nil
+}
+
+// IsUniqueViolation reports whether err is a SQLite UNIQUE (or PRIMARY KEY)
+// constraint violation, so callers can map races to a 409 conflict instead of
+// a generic 500.
+func IsUniqueViolation(err error) bool {
+	var se *sqlite.Error
+	if !errors.As(err, &se) {
+		return false
+	}
+	// SQLITE_CONSTRAINT (19), SQLITE_CONSTRAINT_UNIQUE (2067),
+	// SQLITE_CONSTRAINT_PRIMARYKEY (1555)
+	return se.Code() == 19 || se.Code() == 2067 || se.Code() == 1555
 }

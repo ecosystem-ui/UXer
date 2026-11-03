@@ -103,34 +103,41 @@ export default function HomePage() {
                       <Typography variant="h6" noWrap>
                         {p.name}
                       </Typography>
-                      <Typography variant="caption" color="text.secondary">
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ display: 'block' }}
+                      >
                         Updated {new Date(p.updated_at).toLocaleString()}
                       </Typography>
+                      {p.role === 'viewer' && (
+                        <Typography variant="caption" color="text.secondary">
+                          Shared by {p.owner_name || 'someone'}
+                        </Typography>
+                      )}
                     </CardContent>
                   </CardActionArea>
-                  <IconButton
-                    size="small"
-                    aria-label={`Project actions for ${p.name}`}
-                    sx={{ position: 'absolute', top: 8, right: 8 }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setMenuFor(p);
-                      setMenuAnchor(e.currentTarget);
-                    }}
-                  >
-                    <MoreVertIcon />
-                  </IconButton>
+                  {p.role !== 'viewer' && (
+                    <IconButton
+                      size="small"
+                      aria-label={`Project actions for ${p.name}`}
+                      sx={{ position: 'absolute', top: 8, right: 8 }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setMenuFor(p);
+                        setMenuAnchor(e.currentTarget);
+                      }}
+                    >
+                      <MoreVertIcon />
+                    </IconButton>
+                  )}
                 </Card>
               </Grid>
             ))}
           </Grid>
         )}
 
-        <Menu
-          anchorEl={menuAnchor}
-          open={Boolean(menuAnchor)}
-          onClose={() => setMenuAnchor(null)}
-        >
+        <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)}>
           <MenuItem
             onClick={() => {
               setMenuAnchor(null);

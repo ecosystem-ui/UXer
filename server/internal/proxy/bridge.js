@@ -19,7 +19,12 @@
   var mode = 'browse';
   var pins = [];
   var activeHighlight = null;
+  var activeHighlightPage = null;
   var highlightTimer = null;
+  // Wizard-replay progress tracking, used to detect when the wizard is gated
+  // by validation/required fields and can't reach the target step.
+  var replayStep = '';
+  var replayStuck = 0;
 
   function post(type, data) {
     try {
@@ -125,23 +130,128 @@
     try { return document.querySelectorAll(sel).length; } catch (e) { return -1; }
   }
 
+  // Auto-generated IDs are regenerated on every render, so a selector built
+  // from one breaks as soon as the page reloads. These include PatternFly's
+  // `pf-random-id-_r_16_` / `pf-nav-expandable-_r_f_` (a `_r_XX_` useId
+  // suffix) and React 19's `:rN:` form. Treat them as unstable and fall back
+  // to a structural path (or a stable attribute) instead.
+  function isUnstableId(id) {
+    return /^pf-random-id-/.test(id) ||
+           /_r_[0-9a-z]+_$/i.test(id) ||
+           /^:r\d+:/.test(id);
+  }
+
+  function isUnstableValue(v) {
+    return /^pf-random-id-/.test(v) ||
+           /_r_[0-9a-z]+_$/i.test(v) ||
+           /:r\d+:/.test(v);
+  }
+
+  function escapeAttr(v) {
+    return String(v).replace(/"/g, '\\"');
+  }
+
+  function escapeText(v) {
+    return v.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  }
+
+  function normalizeText(el) {
+    return (el.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  // Return a CSS class selector built from an element's stable classes,
+  // dropping PatternFly modifiers/state (`pf-m-*`) and utility/state classes
+  // that change between renders.
+  function stableClassSelector(el) {
+    var cls = typeof el.className === 'string' ? el.className : '';
+    if (!cls) return '';
+    var parts = cls.split(/\s+/).filter(function (c) {
+      if (!c) return false;
+      if (/^pf-m-/.test(c)) return false;
+      if (/^(is-|has-)/.test(c)) return false;
+      if (/^(active|selected|focused|disabled|current|open|closed|expanded|collapsed|hover|focus|hidden)$/i.test(c)) return false;
+      return true;
+    });
+    if (!parts.length) return '';
+    return parts.map(function (c) { return '.' + cssEscape(c); }).join('');
+  }
+
+  // Resolve a selector that may carry a text constraint of the form
+  //   <css>:uxer-text("<exact text>")
+  // Plain CSS selectors pass through to querySelector. Text constraints let us
+  // anchor on stable classes + content (e.g. a card title) instead of a
+  // brittle structural nth-of-type path.
+  function queryAll(sel) {
+    if (!sel) return [];
+    var m = /^(.*?):uxer-text\("((?:[^"\\]|\\.)*)"\)$/.exec(sel);
+    if (!m) {
+      try { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
+      catch (e) { return []; }
+    }
+    var base = m[1];
+    var text = m[2].replace(/\\(["\\])/g, '$1');
+    var els = [];
+    try { els = Array.prototype.slice.call(document.querySelectorAll(base)); }
+    catch (e) { return []; }
+    return els.filter(function (el) { return normalizeText(el) === text; });
+  }
+
+  function findElement(sel) {
+    var all = queryAll(sel);
+    return all.length ? all[0] : null;
+  }
+
   function uniqueSelector(el) {
     if (!el || el.nodeType !== 1) return '';
-    if (el.id) {
+    var tag = el.tagName.toLowerCase();
+
+    if (el.id && !isUnstableId(el.id)) {
       var s = '#' + cssEscape(el.id);
       if (countMatches(s) === 1) return s;
     }
-    var dt = el.getAttribute && el.getAttribute('data-testid');
-    if (dt) {
-      var t = '[data-testid="' + String(dt).replace(/"/g, '\\"') + '"]';
-      if (countMatches(t) === 1) return t;
+
+    // Stable data-* attributes (test ids and similar) produce resilient
+    // selectors. Skip auto-generated PatternFly OUIA ids (useId suffix
+    // `_r_XX_`) which change on every render.
+    var dataAttrs = ['data-testid', 'data-test', 'data-cy', 'data-qa', 'data-id',
+                     'data-qa-id', 'data-ouia-component-id'];
+    for (var di = 0; di < dataAttrs.length; di++) {
+      var dv = el.getAttribute && el.getAttribute(dataAttrs[di]);
+      if (!dv || isUnstableValue(dv)) continue;
+      var ds = '[' + dataAttrs[di] + '="' + escapeAttr(dv) + '"]';
+      if (countMatches(ds) === 1) return ds;
+    }
+
+    // Stable, semantic attributes produce resilient selectors. PatternFly
+    // form controls (search inputs, filters) often have an aria-label or
+    // placeholder but no stable id, so prefer these over a structural path
+    // that would otherwise anchor on a volatile auto-generated ID.
+    var stableAttrs = ['aria-label', 'placeholder', 'name', 'title'];
+    for (var i = 0; i < stableAttrs.length; i++) {
+      var av = el.getAttribute && el.getAttribute(stableAttrs[i]);
+      if (!av) continue;
+      var as = tag + '[' + stableAttrs[i] + '="' + escapeAttr(av) + '"]';
+      if (countMatches(as) === 1) return as;
+    }
+
+    // Text-anchored selector: for leaf elements with short, stable text (card
+    // titles, buttons, labels, cells), anchor on a stable class plus the exact
+    // text content. This is far more resilient than a structural nth-of-type
+    // path, which breaks when sibling DOM shifts.
+    var ownText = normalizeText(el);
+    if (ownText && ownText.length <= 80) {
+      var clsSel = stableClassSelector(el);
+      if (clsSel) {
+        var ts = clsSel + ':uxer-text("' + escapeText(ownText) + '")';
+        if (queryAll(ts).length === 1) return ts;
+      }
     }
 
     // Path of nth-of-type segments up to the first stable ancestor.
     var path = [];
     var node = el;
     while (node && node.nodeType === 1 && node.tagName.toLowerCase() !== 'html') {
-      if (node.id) {
+      if (node.id && !isUnstableId(node.id)) {
         path.unshift('#' + cssEscape(node.id));
         break;
       }
@@ -166,6 +276,83 @@
     return t.slice(0, 120);
   }
 
+  // The active wizard step, if the element lives inside a stepper. PatternFly
+  // marks the current nav link with aria-current="step" and `.pf-m-current`,
+  // and gives each step a stable id (e.g. "catalog", "networking"). We prefer
+  // the id, then the label text, then the 0-based index.
+  function currentStepKey() {
+    var links = document.querySelectorAll('.pf-v6-c-wizard__nav-link');
+    for (var i = 0; i < links.length; i++) {
+      var l = links[i];
+      var isCurrent = l.getAttribute('aria-current') === 'step' ||
+        /\bpf-m-current\b/.test(l.className || '');
+      if (!isCurrent) continue;
+      if (l.id) return l.id;
+      var txt = (l.textContent || '').replace(/\s+/g, ' ').trim();
+      if (txt) return txt;
+      return String(i);
+    }
+    return '';
+  }
+
+  // The wizard's "Next" button, if one is present. It may be disabled (e.g.
+  // validation still pending) — callers check `.disabled` before clicking.
+  function wizardNextButton() {
+    var footer = document.querySelector('.pf-v6-c-wizard__footer');
+    if (!footer) return null;
+    var btns = footer.querySelectorAll('button');
+    for (var i = 0; i < btns.length; i++) {
+      var b = btns[i];
+      if ((b.textContent || '').replace(/\s+/g, ' ').trim() === 'Next') return b;
+    }
+    return null;
+  }
+
+  // The wizard nav link matching a recorded step key (id first, then label
+  // text, then 0-based index).
+  function wizardStepLink(step) {
+    var links = document.querySelectorAll('.pf-v6-c-wizard__nav-link');
+    for (var i = 0; i < links.length; i++) {
+      if (links[i].id === step) return links[i];
+    }
+    for (var i = 0; i < links.length; i++) {
+      var txt = (links[i].textContent || '').replace(/\s+/g, ' ').trim();
+      if (txt === step) return links[i];
+    }
+    if (/^\d+$/.test(step)) {
+      var idx = parseInt(step, 10);
+      if (idx >= 0 && idx < links.length) return links[idx];
+    }
+    return null;
+  }
+
+  // A human-readable label for a recorded step key (e.g. "Cluster version").
+  function wizardStepLabel(step) {
+    var link = wizardStepLink(step);
+    if (!link) return step || '';
+    var main = link.querySelector('.pf-v6-c-wizard__nav-link-main');
+    if (main) {
+      var t = (main.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t) return t;
+    }
+    return (link.textContent || '').replace(/\s+/g, ' ').trim() || step;
+  }
+
+  // Why the wizard currently can't advance ('' if it can). PatternFly shows
+  // validation errors via `aria-invalid` / `.pf-m-error`, or disables "Next"
+  // (but only counts a disabled Next as a block when there's no catalog card
+  // left to select, i.e. we're past the card-selection gate).
+  function wizardBlockReason() {
+    var invalid = document.querySelector(
+      '[aria-invalid="true"], .pf-m-error, .pf-v6-c-form__group.pf-m-error'
+    );
+    if (invalid) return 'validation';
+    var next = wizardNextButton();
+    var card = document.querySelector('.catalog-item-card--wizard');
+    if (next && next.disabled && !card) return 'required-fields';
+    return '';
+  }
+
   function capture(el, cx, cy) {
     var rect = el.getBoundingClientRect();
     var x = rect.width > 0 ? (cx - rect.left) / rect.width : 0.5;
@@ -174,6 +361,7 @@
       selector: uniqueSelector(el),
       text: textExcerpt(el),
       url: designUrl(window.location.href),
+      step: currentStepKey(),
       x: Math.min(1, Math.max(0, x)),
       y: Math.min(1, Math.max(0, y))
     };
@@ -229,8 +417,7 @@
       // Only render pins that belong to the current page. Pins with no url
       // (legacy) are shown everywhere.
       if (p.url && cur && pageKey(p.url) !== cur) continue;
-      var el = null;
-      try { el = document.querySelector(p.selector); } catch (e) {}
+      var el = findElement(p.selector);
       if (!el) continue;
       var r = el.getBoundingClientRect();
       if (r.width === 0 && r.height === 0) continue;
@@ -246,9 +433,16 @@
   function refreshPositions() {
     renderPins();
     if (activeHighlight) {
-      var el = null;
-      try { el = document.querySelector(activeHighlight); } catch (e) {}
+      // If the iframe navigated to a different page, the highlighted element
+      // no longer exists — drop the stale border instead of leaving it behind.
+      var cur = currentPage();
+      if (activeHighlightPage && cur && activeHighlightPage !== cur) {
+        clearHighlight();
+        return;
+      }
+      var el = findElement(activeHighlight);
       if (el) positionHighlight(el);
+      else clearHighlight();
     }
   }
 
@@ -293,39 +487,131 @@
       pins = d.pins || [];
       renderPins();
     } else if (d.type === 'focus') {
-      focusSelector(d.selector);
+      focusWithStep(d.selector, d.step, 20, d.persist, d.id);
     } else if (d.type === 'navigate') {
-      navigateTo(d.url, d.selector);
+      navigateTo(d.url, d.selector, d.step, d.persist, d.id);
+    } else if (d.type === 'clear') {
+      clearHighlight();
     }
   });
 
   function clearHighlight() {
     highlightEl.style.display = 'none';
     activeHighlight = null;
+    activeHighlightPage = null;
     if (highlightTimer) { clearTimeout(highlightTimer); highlightTimer = null; }
   }
 
-  function focusSelector(selector, retries) {
+  function focusSelector(selector, retries, persist) {
     if (typeof retries !== 'number') retries = 0;
-    var el = null;
-    try { el = document.querySelector(selector); } catch (e) {}
+    var el = findElement(selector);
     if (!el) {
       if (retries > 0) {
-        setTimeout(function () { focusSelector(selector, retries - 1); }, 150);
+        setTimeout(function () { focusSelector(selector, retries - 1, persist); }, 150);
       }
       return;
     }
     try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
     activeHighlight = selector;
+    activeHighlightPage = currentPage();
     positionHighlight(el);
-    if (highlightTimer) clearTimeout(highlightTimer);
-    highlightTimer = setTimeout(clearHighlight, 2500);
+    if (highlightTimer) { clearTimeout(highlightTimer); highlightTimer = null; }
+    if (!persist) highlightTimer = setTimeout(clearHighlight, 2500);
+  }
+
+  // Focus an element, optionally replaying a wizard to its recorded step first
+  // (see currentStepKey / wizardNextButton). When the wizard can't advance
+  // because required fields / validation block it, we post a `step-blocked`
+  // message with guidance instead of polling until the budget runs out.
+  function focusWithStep(selector, step, retries, persist, id) {
+    replayStep = '';
+    replayStuck = 0;
+    stepLoop(selector, step, retries, persist, id);
+  }
+
+  function stepLoop(selector, step, retries, persist, id) {
+    if (!step) {
+      focusSelector(selector, retries, persist);
+      return;
+    }
+
+    if (currentStepKey() === step) {
+      focusSelector(selector, 30, persist);
+      return;
+    }
+
+    function schedule() {
+      if (retries > 0) {
+        setTimeout(function () { stepLoop(selector, step, retries - 1, persist, id); }, 250);
+      } else {
+        focusSelector(selector, 10, persist);
+      }
+    }
+
+    var cur = currentStepKey();
+    var link = wizardStepLink(step);
+    var targetDisabled = !!link && (/\bpf-m-disabled\b/.test(link.className || '') || link.disabled);
+    var block = wizardBlockReason();
+
+    // Detect a validation/required-field gate: the target step is disabled and
+    // we've been stuck on the same step across several polls. Report it so the
+    // parent can surface guidance instead of failing silently.
+    if (link && targetDisabled) {
+      if (cur === replayStep) replayStuck++;
+      else { replayStep = cur; replayStuck = 1; }
+      if (block && replayStuck >= 3) {
+        post('step-blocked', {
+          id: id,
+          selector: selector,
+          step: step,
+          stepLabel: wizardStepLabel(step),
+          reason: block
+        });
+        replayStuck = 0;
+        return;
+      }
+    } else {
+      replayStep = cur;
+      replayStuck = 0;
+    }
+
+    // The target nav link is enabled: jump straight to it (back or forward).
+    if (link && !targetDisabled) {
+      link.click();
+      schedule();
+      return;
+    }
+
+    // Otherwise advance forward. Some wizards (e.g. the cluster creation
+    // wizard) gate "Next" behind selecting a catalog item card; clicking the
+    // card is idempotent, so if a card is present, select it and then advance.
+    var card = document.querySelector('.catalog-item-card--wizard');
+    if (card) {
+      card.click();
+      setTimeout(function () {
+        var n = wizardNextButton();
+        if (n && !n.disabled) n.click();
+        schedule();
+      }, 120);
+      return;
+    }
+
+    var next = wizardNextButton();
+    if (next && !next.disabled) {
+      next.click();
+      schedule();
+      return;
+    }
+
+    // No actionable "Next" (still rendering, or a required field blocks it):
+    // keep polling while the budget lasts, then give up gracefully.
+    schedule();
   }
 
   // Client-side navigate the SPA to a design URL (same origin), then focus
   // an element. SPA deep links aren't served by the origin (e.g. GitHub
   // Pages), so we drive the router in place instead of a full reload.
-  function navigateTo(url, selector) {
+  function navigateTo(url, selector, step, persist, id) {
     try {
       var a = new URL(url, base);
       if (a.origin !== origin) return false;
@@ -337,7 +623,7 @@
         history.pushState({}, '', path);
         window.dispatchEvent(new PopStateEvent('popstate', { state: history.state }));
       }
-      if (selector) focusSelector(selector, 30);
+      if (selector) focusWithStep(selector, step, 40, persist, id);
       return true;
     } catch (e) { return false; }
   }

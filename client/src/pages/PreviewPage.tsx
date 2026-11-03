@@ -5,72 +5,30 @@ import {
   Typography,
   IconButton,
   Button,
-  TextField,
-  Avatar,
+  Tooltip,
   CircularProgress,
+  Alert,
+  Snackbar,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AddCommentIcon from '@mui/icons-material/AddComment';
-import CheckIcon from '@mui/icons-material/Check';
-import ReplayIcon from '@mui/icons-material/Replay';
-import SendIcon from '@mui/icons-material/Send';
 import SearchIcon from '@mui/icons-material/Search';
 import CloseIcon from '@mui/icons-material/Close';
-import FormatQuoteIcon from '@mui/icons-material/FormatQuote';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import ModeCommentOutlinedIcon from '@mui/icons-material/ModeCommentOutlined';
 import { api } from '../api/client';
-import type { Version, Comment, CommentStatus, Reply } from '../api/types';
+import type { Version, Comment, CommentStatus } from '../api/types';
 import type { Anchor, Pin } from '../bridge-protocol';
 import { sendToBridge } from '../bridge-protocol';
 import { useThemeMode } from '../theme/ThemeModeContext';
-
-type Filter = 'open' | 'resolved' | 'all';
-type Sort = 'newest' | 'oldest';
-
-function timeAgo(iso: string): string {
-  const then = new Date(iso).getTime();
-  const secs = Math.round((Date.now() - then) / 1000);
-  if (Number.isNaN(secs) || secs < 0) return '';
-  if (secs < 60) return 'just now';
-  const mins = Math.round(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.round(hrs / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(iso).toLocaleDateString();
-}
-
-type Authorish = { author?: { name: string; email: string } | null };
-function displayName(a: Authorish | null | undefined): string {
-  return a?.author?.name || a?.author?.email || 'Anonymous';
-}
-
-// Normalize a stored page_url to a navigable design URL. Handles legacy
-// values that were accidentally stored in proxied form.
-function normalizeDesignUrl(pageUrl: string): string {
-  if (!pageUrl) return '';
-  const marker = '/__uxer__/p/';
-  const idx = pageUrl.indexOf(marker);
-  if (idx === -1) return pageUrl;
-  const token = pageUrl.slice(idx + marker.length);
-  const slash = token.indexOf('/');
-  const b64 = slash === -1 ? token : token.slice(0, slash);
-  const rest = slash === -1 ? '' : token.slice(slash);
-  try {
-    let b = b64.replace(/-/g, '+').replace(/_/g, '/');
-    while (b.length % 4 !== 0) b += '=';
-    const decoded = atob(b);
-    const nl = decoded.indexOf('\n');
-    const origin = nl === -1 ? decoded : decoded.slice(0, nl);
-    return origin + rest;
-  } catch {
-    return '';
-  }
-}
+import {
+  CommentCard,
+  ThreadDetail,
+  FilterSeg,
+  NewCommentComposer,
+  normalizeDesignUrl,
+  type Filter,
+  type Sort,
+  type BlockedInfo,
+} from '../components/comments';
 
 export default function PreviewPage() {
   const { projectId, versionId } = useParams<{ projectId: string; versionId: string }>();
@@ -88,18 +46,25 @@ export default function PreviewPage() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [currentUrl, setCurrentUrl] = useState('');
+  const [role, setRole] = useState<'owner' | 'viewer'>('viewer');
+  const [blocked, setBlocked] = useState<Record<string, BlockedInfo>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const pinsRef = useRef<Pin[]>([]);
 
   const reload = async (id: string) => {
     try {
       const cs = await api.listComments(id);
       setComments(cs);
-    } catch {
+      setLoadFailed(false);
+    } catch (e) {
       setComments([]);
+      setLoadFailed(true);
+      setError(e instanceof Error ? e.message : 'Failed to load comments');
     }
   };
 
-  // Load version metadata.
+  // Load version metadata and the current user's project role.
   useEffect(() => {
     if (!projectId || !versionId) return;
     api
@@ -110,6 +75,10 @@ export default function PreviewPage() {
         else navigate(`/projects/${projectId}`);
       })
       .catch(() => navigate(`/projects/${projectId}`));
+    api
+      .getProject(projectId)
+      .then((p) => setRole(p.role ?? 'viewer'))
+      .catch(() => setRole('viewer'));
   }, [projectId, versionId, navigate]);
 
   // Load comments.
@@ -120,6 +89,7 @@ export default function PreviewPage() {
   // Listen for bridge messages (element anchor captures, navigation, ready).
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
       const d = e.data;
       if (!d || d.source !== 'uxer-bridge') return;
       if (d.type === 'anchor') {
@@ -137,6 +107,17 @@ export default function PreviewPage() {
         }
       } else if (d.type === 'location') {
         setCurrentUrl(typeof d.url === 'string' ? d.url : '');
+      } else if (d.type === 'step-blocked') {
+        const id = typeof d.id === 'string' ? d.id : null;
+        if (id) {
+          setBlocked((b) => ({
+            ...b,
+            [id]: {
+              stepLabel: typeof d.stepLabel === 'string' ? d.stepLabel : undefined,
+              reason: typeof d.reason === 'string' ? d.reason : undefined,
+            },
+          }));
+        }
       }
     };
     window.addEventListener('message', onMsg);
@@ -163,6 +144,7 @@ export default function PreviewPage() {
       status: c.status,
       index: i + 1,
       url: normalizeDesignUrl(c.page_url) || '',
+      step: c.step || '',
     }));
   }, [comments]);
 
@@ -172,39 +154,65 @@ export default function PreviewPage() {
     sendToBridge(iframeRef.current?.contentWindow ?? null, { source: 'uxer', type: 'pins', pins });
   }, [pins, comments]);
 
-  const sendFocus = (selector: string) => {
+  const sendFocus = (selector: string, persist = false, step = '', id = '') => {
     sendToBridge(iframeRef.current?.contentWindow ?? null, {
       source: 'uxer',
       type: 'focus',
       selector,
+      step,
+      persist,
+      id,
     });
   };
 
-  const focusComment = (c: Comment) => {
+  const clearFocus = () => {
+    sendToBridge(iframeRef.current?.contentWindow ?? null, {
+      source: 'uxer',
+      type: 'clear',
+    });
+  };
+
+  const focusComment = (c: Comment, persist = false) => {
     setActiveId(c.id);
+    // Clear any stale "blocked" flag: each attempt re-detects from scratch.
+    setBlocked((b) => {
+      if (!(c.id in b)) return b;
+      const rest = { ...b };
+      delete rest[c.id];
+      return rest;
+    });
     const target = normalizeDesignUrl(c.page_url);
+    const step = c.step || '';
     // No page URL recorded (legacy): just focus on the current page.
     if (!target) {
-      sendFocus(c.selector);
+      sendFocus(c.selector, persist, step, c.id);
       return;
     }
     // Already on the comment's page: just focus the element.
     if (currentUrl === target) {
-      sendFocus(c.selector);
+      sendFocus(c.selector, persist, step, c.id);
       return;
     }
     // Navigate the SPA client-side via the bridge (same origin). Deep links
     // aren't served by the origin (e.g. GitHub Pages), so a full reload would
     // 404. Cross-origin targets fall back to a full reload.
     const win = iframeRef.current?.contentWindow ?? null;
-    let sameOrigin = true;
+    let sameOrigin: boolean;
     try {
       sameOrigin = new URL(target).origin === new URL(version!.url).origin;
     } catch {
       sameOrigin = false;
     }
     if (sameOrigin) {
-      sendToBridge(win, { source: 'uxer', type: 'navigate', url: target, selector: c.selector });
+      sendToBridge(win, {
+        source: 'uxer',
+        type: 'navigate',
+        url: target,
+        selector: c.selector,
+        step,
+        persist,
+        id: c.id,
+      });
     } else {
       iframeRef.current!.src = `/proxy?url=${encodeURIComponent(target)}`;
     }
@@ -212,42 +220,61 @@ export default function PreviewPage() {
 
   const openDetail = (c: Comment) => {
     setDetailId(c.id);
-    focusComment(c);
+    // Exit comment mode when opening a thread so the hover highlight doesn't
+    // override the persistent selection highlight.
+    setCommentMode(false);
   };
 
   const submitComment = async (body: string) => {
     if (!pendingAnchor || !versionId || !body.trim()) return;
-    const created = await api.createComment(versionId, {
-      selector: pendingAnchor.selector,
-      text_excerpt: pendingAnchor.text,
-      page_url: normalizeDesignUrl(pendingAnchor.url || '') || version?.url || '',
-      x: pendingAnchor.x,
-      y: pendingAnchor.y,
-      body: body.trim(),
-    });
-    setPendingAnchor(null);
-    await reload(versionId);
-    setFilter((f) => (f === 'resolved' ? 'open' : f));
-    setActiveId(created.id);
+    try {
+      const created = await api.createComment(versionId, {
+        selector: pendingAnchor.selector,
+        text_excerpt: pendingAnchor.text,
+        page_url: normalizeDesignUrl(pendingAnchor.url || '') || version?.url || '',
+        step: pendingAnchor.step || '',
+        x: pendingAnchor.x,
+        y: pendingAnchor.y,
+        body: body.trim(),
+      });
+      setPendingAnchor(null);
+      await reload(versionId);
+      setFilter((f) => (f === 'resolved' ? 'open' : f));
+      setActiveId(created.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to post comment');
+    }
   };
 
   const setStatus = async (c: Comment, status: CommentStatus) => {
-    await api.updateComment(c.id, { status, resolved_version_id: versionId });
-    await reload(versionId!);
+    try {
+      await api.updateComment(c.id, { status, resolved_version_id: versionId });
+      await reload(versionId!);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update comment');
+    }
   };
 
   const addReply = async (c: Comment, body: string) => {
-    await api.createReply(c.id, body);
-    await reload(versionId!);
+    try {
+      await api.createReply(c.id, body);
+      await reload(versionId!);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to post reply');
+    }
   };
 
   const deleteThread = async (c: Comment) => {
-    await api.deleteComment(c.id);
-    setDetailId(null);
-    await reload(versionId!);
+    try {
+      await api.deleteComment(c.id);
+      setDetailId(null);
+      await reload(versionId!);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete comment');
+    }
   };
 
-  const list = comments ?? [];
+  const list = useMemo(() => comments ?? [], [comments]);
   const openCount = list.filter((c) => c.status === 'open').length;
   const resolvedCount = list.filter((c) => c.status === 'resolved').length;
   const counts: Record<Filter, number> = {
@@ -268,7 +295,9 @@ export default function PreviewPage() {
             c.text_excerpt,
             c.author?.name ?? '',
             c.author?.email ?? '',
-            ...(c.replies ?? []).map((r) => `${r.body} ${r.author?.name ?? ''} ${r.author?.email ?? ''}`),
+            ...(c.replies ?? []).map(
+              (r) => `${r.body} ${r.author?.name ?? ''} ${r.author?.email ?? ''}`,
+            ),
           ]
             .join(' ')
             .toLowerCase()
@@ -282,7 +311,25 @@ export default function PreviewPage() {
   }, [list, filter, query, sort]);
 
   const detail = list.find((c) => c.id === detailId) ?? null;
-  const indexOf = (id: string) => list.findIndex((c) => c.id === id) + 1;
+  const indexMap = useMemo(() => {
+    const m = new Map<string, number>();
+    list.forEach((c, i) => m.set(c.id, i + 1));
+    return m;
+  }, [list]);
+  const indexOf = (id: string) => indexMap.get(id) ?? 0;
+  const canManage = role === 'owner';
+  const canResolve = role === 'owner' || role === 'viewer';
+
+  // Keep the selected element highlighted while a thread is open; clear the
+  // highlight when the thread closes.
+  useEffect(() => {
+    if (detail) {
+      focusComment(detail, true);
+    } else {
+      clearFocus();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailId]);
 
   if (!version) {
     return (
@@ -294,15 +341,26 @@ export default function PreviewPage() {
 
   const emptyTitle = query
     ? 'No matching comments'
-    : filter === 'open'
-      ? 'All caught up'
-      : 'No comments here';
+    : loadFailed
+      ? "Couldn't load comments"
+      : filter === 'open'
+        ? 'All caught up'
+        : 'No comments here';
   const emptySubtitle = query
     ? 'Try a different search.'
-    : 'Turn on comment mode and click the page to leave feedback.';
+    : loadFailed
+      ? 'Check your connection and try again.'
+      : 'Turn on comment mode and click the page to leave feedback.';
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', bgcolor: 'background.paper' }}>
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100vh',
+        bgcolor: 'background.paper',
+      }}
+    >
       {/* Header */}
       <Box
         component="header"
@@ -350,35 +408,62 @@ export default function PreviewPage() {
           >
             {openCount} open
           </Box>
-          <Button
-            size="small"
-            onClick={() => {
-              setCommentMode((m) => !m);
-              setPendingAnchor(null);
-            }}
-            startIcon={<AddCommentIcon sx={{ fontSize: 16 }} />}
-            sx={{
-              border: '1px solid',
-              borderColor: commentMode ? 'primary.main' : 'divider',
-              bgcolor: commentMode ? 'primary.main' : 'transparent',
-              color: commentMode ? 'primary.contrastText' : 'text.primary',
-              px: 1.5,
-              py: 0.75,
-              fontSize: 14,
-              fontWeight: 500,
-              '&:hover': commentMode
-                ? { bgcolor: 'primary.main' }
-                : { bgcolor: tokens.muted, borderColor: 'divider' },
-            }}
+          <Tooltip
+            title={detail !== null ? "Exit back from the comment's thread" : ''}
+            placement="bottom"
           >
-            {commentMode ? 'Click page to comment' : 'Comment mode'}
-          </Button>
+            <Box component="span" sx={{ display: 'inline-flex' }}>
+              <Button
+                size="small"
+                disabled={detail !== null}
+                onClick={() => {
+                  setCommentMode((m) => !m);
+                  setPendingAnchor(null);
+                }}
+                startIcon={<AddCommentIcon sx={{ fontSize: 16 }} />}
+                sx={{
+                  border: '1px solid',
+                  borderColor: commentMode ? 'primary.main' : 'divider',
+                  bgcolor: commentMode ? 'primary.main' : 'transparent',
+                  color: commentMode ? 'primary.contrastText' : 'text.primary',
+                  px: 1.5,
+                  py: 0.75,
+                  fontSize: 14,
+                  fontWeight: 500,
+                  '&:hover': commentMode
+                    ? { bgcolor: 'primary.main' }
+                    : { bgcolor: tokens.muted, borderColor: 'divider' },
+                  '&.Mui-disabled': {
+                    color: 'text.disabled',
+                    borderColor: 'divider',
+                    bgcolor: 'transparent',
+                  },
+                }}
+              >
+                {commentMode ? 'Click page to comment' : 'Comment mode'}
+              </Button>
+            </Box>
+          </Tooltip>
         </Box>
       </Box>
 
-      <Box sx={{ display: 'flex', flexGrow: 1, minHeight: 0 }}>
+      <Box
+        sx={{
+          display: 'flex',
+          flexGrow: 1,
+          minHeight: 0,
+          flexDirection: { xs: 'column', md: 'row' },
+        }}
+      >
         {/* Preview */}
-        <Box sx={{ flexGrow: 1, position: 'relative', bgcolor: tokens.canvas }}>
+        <Box
+          sx={{
+            flexGrow: 1,
+            position: 'relative',
+            bgcolor: tokens.canvas,
+            minHeight: { xs: '40vh', md: 0 },
+          }}
+        >
           <iframe
             ref={iframeRef}
             src={`/proxy?url=${encodeURIComponent(version.url)}`}
@@ -391,11 +476,14 @@ export default function PreviewPage() {
         <Box
           component="aside"
           sx={{
-            width: 380,
+            width: { xs: '100%', md: 380 },
             flexShrink: 0,
+            flexGrow: { xs: 1, md: 0 },
+            minHeight: 0,
             display: 'flex',
             flexDirection: 'column',
-            borderLeft: 1,
+            borderLeft: { xs: 0, md: 1 },
+            borderTop: { xs: 1, md: 0 },
             borderColor: 'divider',
             bgcolor: 'background.paper',
           }}
@@ -405,6 +493,9 @@ export default function PreviewPage() {
               key={detail.id}
               comment={detail}
               index={indexOf(detail.id)}
+              canManage={canManage}
+              canResolve={canResolve}
+              blockedInfo={blocked[detail.id]}
               onBack={() => setDetailId(null)}
               onReply={(body) => addReply(detail, body)}
               onToggle={() => setStatus(detail, detail.status === 'open' ? 'resolved' : 'open')}
@@ -518,7 +609,11 @@ export default function PreviewPage() {
                     <Typography variant="body2" fontWeight={600}>
                       {emptyTitle}
                     </Typography>
-                    <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ mt: 0.5, display: 'block' }}
+                    >
                       {emptySubtitle}
                     </Typography>
                   </Box>
@@ -529,6 +624,8 @@ export default function PreviewPage() {
                       comment={c}
                       index={indexOf(c.id)}
                       active={activeId === c.id}
+                      canResolve={canResolve}
+                      blockedInfo={blocked[c.id]}
                       onOpen={() => openDetail(c)}
                       onToggle={() => setStatus(c, c.status === 'open' ? 'resolved' : 'open')}
                     />
@@ -539,607 +636,17 @@ export default function PreviewPage() {
           )}
         </Box>
       </Box>
-    </Box>
-  );
-}
 
-function FilterSeg({
-  value,
-  onChange,
-  counts,
-}: {
-  value: Filter;
-  onChange: (f: Filter) => void;
-  counts: Record<Filter, number>;
-}) {
-  const { tokens } = useThemeMode();
-  const items: Filter[] = ['open', 'resolved', 'all'];
-  return (
-    <Box
-      sx={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(3, 1fr)',
-        gap: 0.5,
-        bgcolor: tokens.muted,
-        borderRadius: 2,
-        p: 0.5,
-      }}
-    >
-      {items.map((f) => (
-        <Box
-          key={f}
-          component="button"
-          type="button"
-          onClick={() => onChange(f)}
-          sx={{
-            border: 'none',
-            cursor: 'pointer',
-            py: 0.75,
-            borderRadius: 1.5,
-            fontSize: 14,
-            fontWeight: 500,
-            textTransform: 'capitalize',
-            color: value === f ? tokens.foreground : tokens.mutedForeground,
-            bgcolor: value === f ? 'background.paper' : 'transparent',
-            boxShadow: value === f ? '0 1px 2px rgba(2, 6, 24, 0.08)' : 'none',
-            transition: 'all .15s ease',
-            '&:hover': value !== f ? { color: tokens.foreground } : {},
-          }}
-        >
-          {f} <Box component="span" sx={{ fontSize: 12, opacity: 0.7 }}>{counts[f]}</Box>
-        </Box>
-      ))}
-    </Box>
-  );
-}
-
-function NewCommentComposer({
-  excerpt,
-  onCancel,
-  onSubmit,
-}: {
-  excerpt: string;
-  onCancel: () => void;
-  onSubmit: (body: string) => void;
-}) {
-  const { tokens } = useThemeMode();
-  const [text, setText] = useState('');
-  return (
-    <Box
-      sx={{
-        p: 1.5,
-        borderBottom: 1,
-        borderColor: 'divider',
-        bgcolor: tokens.openSoft,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 1,
-      }}
-    >
-      <Typography variant="caption" fontWeight={600} color={tokens.open}>
-        New comment
-      </Typography>
-      {excerpt && (
-        <Box
-          sx={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 0.5,
-            alignSelf: 'flex-start',
-            maxWidth: '100%',
-            bgcolor: 'background.paper',
-            border: 1,
-            borderColor: 'divider',
-            px: 1,
-            py: 0.5,
-            borderRadius: 1,
-            fontSize: 13,
-            color: 'text.secondary',
-          }}
-        >
-          <FormatQuoteIcon sx={{ fontSize: 12 }} />
-          <Typography component="span" variant="caption" noWrap sx={{ maxWidth: 280 }}>
-            {excerpt}
-          </Typography>
-        </Box>
-      )}
-      <TextField
-        autoFocus
-        multiline
-        minRows={3}
-        fullWidth
-        size="small"
-        placeholder="Write a comment…"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && text.trim()) onSubmit(text.trim());
-          if (e.key === 'Escape') onCancel();
-        }}
-      />
-      <Box display="flex" justifyContent="flex-end" gap={1}>
-        <Button
-          size="small"
-          onClick={onCancel}
-          sx={{ color: 'text.primary', '&:hover': { bgcolor: 'background.paper' } }}
-        >
-          Cancel
-        </Button>
-        <Button size="small" variant="contained" disabled={!text.trim()} onClick={() => onSubmit(text.trim())}>
-          Comment
-        </Button>
-      </Box>
-    </Box>
-  );
-}
-
-function CommentCard({
-  comment,
-  index,
-  active,
-  onOpen,
-  onToggle,
-}: {
-  comment: Comment;
-  index: number;
-  active: boolean;
-  onOpen: () => void;
-  onToggle: () => void;
-}) {
-  const { tokens } = useThemeMode();
-  const resolved = comment.status === 'resolved';
-  const name = displayName(comment);
-  const replies = comment.replies ?? [];
-  const last = replies[replies.length - 1];
-  const people = Array.from(
-    new Set([comment.author?.name || comment.author?.email || 'Anonymous', ...replies.map((r) => displayName(r))]),
-  );
-
-  return (
-    <Box
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(e) => e.key === 'Enter' && onOpen()}
-      sx={{
-        cursor: 'pointer',
-        borderRadius: 2,
-        border: 1,
-        borderColor: active ? tokens.open : 'divider',
-        bgcolor: 'background.paper',
-        p: 1.5,
-        opacity: resolved ? 0.75 : 1,
-        transition: 'box-shadow .15s ease, border-color .15s ease',
-        '&:hover': { boxShadow: '0 1px 3px rgba(2, 6, 24, 0.12)' },
-        '&:hover .resolve-btn': { opacity: 1 },
-      }}
-    >
-      <Box display="flex" alignItems="center" gap={1}>
-        <Box
-          component="span"
-          sx={{
-            height: 20,
-            minWidth: 20,
-            px: 0.5,
-            borderRadius: 999,
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 10,
-            fontWeight: 600,
-            color: '#fff',
-            bgcolor: resolved ? tokens.resolved : tokens.open,
-          }}
-        >
-          {index}
-        </Box>
-        <Typography variant="body2" fontWeight={600} noWrap sx={{ maxWidth: 160 }}>
-          {name}
-        </Typography>
-        <Typography variant="caption" color="text.secondary" noWrap>
-          {timeAgo(comment.created_at)}
-        </Typography>
-        <IconButton
-          size="small"
-          className="resolve-btn"
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggle();
-          }}
-          title={resolved ? 'Reopen' : 'Resolve'}
-          sx={{
-            ml: 'auto',
-            opacity: 0,
-            transition: 'opacity .15s ease',
-            color: resolved ? 'text.secondary' : tokens.resolved,
-            '&:hover': { bgcolor: resolved ? tokens.muted : tokens.resolvedSoft },
-          }}
-        >
-          {resolved ? <ReplayIcon sx={{ fontSize: 14 }} /> : <CheckIcon sx={{ fontSize: 14 }} />}
-        </IconButton>
-      </Box>
-
-      <Typography
-        variant="body2"
-        sx={{
-          mt: 0.5,
-          display: '-webkit-box',
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: 'vertical',
-          overflow: 'hidden',
-          color: resolved ? 'text.secondary' : 'text.primary',
-          textDecoration: resolved ? 'line-through' : 'none',
-          textDecorationColor: 'rgba(98, 116, 142, 0.4)',
-        }}
+      <Snackbar
+        open={error !== null}
+        autoHideDuration={6000}
+        onClose={() => setError(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >
-        {comment.body}
-      </Typography>
-
-      {comment.text_excerpt && (
-        <Box
-          component="span"
-          sx={{
-            mt: 0.75,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 0.5,
-            maxWidth: '100%',
-            bgcolor: tokens.muted,
-            px: 0.75,
-            py: 0.25,
-            borderRadius: 0.75,
-            fontSize: 12,
-            color: 'text.secondary',
-          }}
-        >
-          <FormatQuoteIcon sx={{ fontSize: 12 }} />
-          <Typography component="span" variant="caption" noWrap sx={{ maxWidth: 260 }}>
-            {comment.text_excerpt}
-          </Typography>
-        </Box>
-      )}
-
-      <Box
-        display="flex"
-        alignItems="center"
-        gap={1}
-        sx={{ mt: 1, pt: 1, borderTop: 1, borderColor: 'divider', fontSize: 12, color: 'text.secondary' }}
-      >
-        {replies.length > 0 ? (
-          <>
-            <Box sx={{ display: 'flex' }}>
-              {people.slice(0, 3).map((p, i) => (
-                <Avatar
-                  key={p}
-                  sx={{
-                    width: 20,
-                    height: 20,
-                    fontSize: 10,
-                    bgcolor: tokens.ink,
-                    color: '#fff',
-                    border: '2px solid',
-                    borderColor: 'background.paper',
-                    ml: i === 0 ? 0 : -0.75,
-                  }}
-                >
-                  {p.charAt(0).toUpperCase()}
-                </Avatar>
-              ))}
-            </Box>
-            <Typography variant="caption" fontWeight={600} color={tokens.open} noWrap>
-              {replies.length} {replies.length === 1 ? 'reply' : 'replies'}
-            </Typography>
-            <Typography variant="caption" noWrap sx={{ flexGrow: 1, minWidth: 0 }}>
-              · {displayName(last)}: {last!.body}
-            </Typography>
-          </>
-        ) : (
-          <Typography variant="caption" sx={{ flexGrow: 1 }}>
-            No replies yet
-          </Typography>
-        )}
-        <ChevronRightIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
-      </Box>
-    </Box>
-  );
-}
-
-function ThreadDetail({
-  comment,
-  index,
-  onBack,
-  onReply,
-  onToggle,
-  onDelete,
-}: {
-  comment: Comment;
-  index: number;
-  onBack: () => void;
-  onReply: (body: string) => void;
-  onToggle: () => void;
-  onDelete: () => void;
-}) {
-  const { tokens } = useThemeMode();
-  const resolved = comment.status === 'resolved';
-  const name = displayName(comment);
-  const replies = comment.replies ?? [];
-  const [reply, setReply] = useState('');
-  const [confirm, setConfirm] = useState(false);
-  const [showOriginal, setShowOriginal] = useState(true);
-  const endRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: 'end' });
-  }, [replies.length]);
-
-  const send = () => {
-    if (reply.trim()) {
-      onReply(reply.trim());
-      setReply('');
-    }
-  };
-
-  return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0 }}>
-      {/* Detail header */}
-      <Box
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 1,
-          px: 1.5,
-          py: 1.5,
-          borderBottom: 1,
-          borderColor: 'divider',
-        }}
-      >
-        <IconButton size="small" onClick={onBack} aria-label="Back to all comments">
-          <ArrowBackIcon fontSize="small" />
-        </IconButton>
-        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="body2" fontWeight={600}>
-            Thread #{index}
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {replies.length + 1} messages · {resolved ? 'Resolved' : 'Open'}
-          </Typography>
-        </Box>
-        <Button
-          size="small"
-          onClick={onToggle}
-          startIcon={resolved ? <ReplayIcon sx={{ fontSize: 16 }} /> : <CheckIcon sx={{ fontSize: 16 }} />}
-          sx={{
-            color: resolved ? 'text.primary' : tokens.resolved,
-            border: '1px solid',
-            borderColor: resolved ? 'divider' : tokens.resolved,
-            px: 1.25,
-            py: 0.5,
-            fontSize: 12,
-            fontWeight: 500,
-            '&:hover': {
-              bgcolor: resolved ? tokens.muted : tokens.resolvedSoft,
-              borderColor: resolved ? 'divider' : tokens.resolved,
-            },
-          }}
-        >
-          {resolved ? 'Reopen' : 'Resolve'}
-        </Button>
-        <IconButton
-          size="small"
-          onClick={() => (confirm ? onDelete() : setConfirm(true))}
-          onBlur={() => setConfirm(false)}
-          title="Delete thread"
-          sx={{
-            color: confirm ? 'error.contrastText' : 'text.secondary',
-            bgcolor: confirm ? 'error.main' : 'transparent',
-            '&:hover': { bgcolor: confirm ? 'error.main' : tokens.muted, color: 'text.primary' },
-          }}
-        >
-          {confirm ? (
-            <Typography variant="caption" sx={{ px: 0.5, fontWeight: 500 }}>
-              Delete?
-            </Typography>
-          ) : (
-            <DeleteOutlineIcon fontSize="small" />
-          )}
-        </IconButton>
-      </Box>
-
-      {/* Messages */}
-      <Box sx={{ flexGrow: 1, overflowY: 'auto', bgcolor: tokens.canvas, p: 1.5 }}>
-        <Box sx={{ borderRadius: 2, border: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
-          <Box
-            component="button"
-            type="button"
-            onClick={() => setShowOriginal((s) => !s)}
-            sx={{
-              display: 'flex',
-              width: '100%',
-              alignItems: 'center',
-              gap: 1.25,
-              p: 1.5,
-              border: 'none',
-              bgcolor: 'transparent',
-              cursor: 'pointer',
-              textAlign: 'left',
-            }}
-          >
-            <Avatar sx={{ width: 28, height: 28, fontSize: 12, bgcolor: tokens.ink, color: '#fff' }}>
-              {name.charAt(0).toUpperCase()}
-            </Avatar>
-            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-              <Box display="flex" alignItems="center" gap={1}>
-                <Typography variant="body2" fontWeight={600}>
-                  {name}
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {timeAgo(comment.created_at)}
-                </Typography>
-              </Box>
-              {!showOriginal && (
-                <Typography variant="body2" color="text.secondary" noWrap>
-                  {comment.body}
-                </Typography>
-              )}
-            </Box>
-            <ExpandMoreIcon
-              sx={{
-                fontSize: 16,
-                color: 'text.secondary',
-                transform: showOriginal ? 'none' : 'rotate(-90deg)',
-                transition: 'transform .15s ease',
-              }}
-            />
-          </Box>
-          {showOriginal && (
-            <Box sx={{ mt: -0.5, px: 1.5, pb: 1.5, pl: '3.25rem' }}>
-              <Typography variant="body2">{comment.body}</Typography>
-              {comment.text_excerpt && (
-                <Box
-                  component="span"
-                  sx={{
-                    mt: 0.75,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 0.5,
-                    bgcolor: tokens.muted,
-                    px: 0.75,
-                    py: 0.25,
-                    borderRadius: 0.75,
-                    fontSize: 12,
-                    color: 'text.secondary',
-                  }}
-                >
-                  <FormatQuoteIcon sx={{ fontSize: 12 }} /> {comment.text_excerpt}
-                </Box>
-              )}
-            </Box>
-          )}
-        </Box>
-
-        {replies.length === 0 ? (
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{ display: 'block', textAlign: 'center', py: 4 }}
-          >
-            No replies yet. Start the discussion below.
-          </Typography>
-        ) : (
-          <Box
-            sx={{
-              position: 'relative',
-              mt: 1.5,
-              pl: 2,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 1.5,
-              '&::before': {
-                content: '""',
-                position: 'absolute',
-                left: '0.85rem',
-                top: 0,
-                bottom: 8,
-                width: 1,
-                bgcolor: 'divider',
-              },
-            }}
-          >
-            {replies.map((r) => (
-              <ReplyRow key={r.id} reply={r} />
-            ))}
-          </Box>
-        )}
-        <div ref={endRef} />
-      </Box>
-
-      {/* Composer */}
-      <Box sx={{ p: 1.5, borderTop: 1, borderColor: 'divider' }}>
-        {resolved ? (
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center' }}>
-            This thread is resolved. Reopen it to continue the discussion.
-          </Typography>
-        ) : (
-          <Box display="flex" alignItems="flex-end" gap={1}>
-            <TextField
-              autoFocus
-              multiline
-              minRows={2}
-              fullWidth
-              size="small"
-              value={reply}
-              onChange={(e) => setReply(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
-                if (e.key === 'Escape') onBack();
-              }}
-              placeholder="Reply to thread… (Shift+Enter for new line)"
-            />
-            <IconButton
-              onClick={send}
-              disabled={!reply.trim()}
-              aria-label="Send reply"
-              sx={{
-                bgcolor: tokens.ink,
-                color: '#fff',
-                '&:hover': { bgcolor: tokens.ink, opacity: 0.9 },
-                '&.Mui-disabled': { bgcolor: tokens.ink, color: '#fff', opacity: 0.4 },
-              }}
-            >
-              <SendIcon sx={{ fontSize: 16 }} />
-            </IconButton>
-          </Box>
-        )}
-      </Box>
-    </Box>
-  );
-}
-
-function ReplyRow({ reply }: { reply: Reply }) {
-  const { tokens } = useThemeMode();
-  const name = displayName(reply);
-  return (
-    <Box className="reply-row" sx={{ position: 'relative', display: 'flex', gap: 1.25 }}>
-      <Avatar
-        sx={{
-          zIndex: 1,
-          width: 20,
-          height: 20,
-          fontSize: 10,
-          bgcolor: tokens.ink,
-          color: '#fff',
-          boxShadow: `0 0 0 4px ${tokens.canvas}`,
-        }}
-      >
-        {name.charAt(0).toUpperCase()}
-      </Avatar>
-      <Box
-        sx={{
-          flexGrow: 1,
-          minWidth: 0,
-          borderRadius: 2,
-          border: 1,
-          borderColor: 'divider',
-          bgcolor: 'background.paper',
-          px: 1.5,
-          py: 1,
-        }}
-      >
-        <Box display="flex" alignItems="center" gap={1}>
-          <Typography variant="caption" fontWeight={600}>
-            {name}
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {timeAgo(reply.created_at)}
-          </Typography>
-        </Box>
-        <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
-          {reply.body}
-        </Typography>
-      </Box>
+        <Alert onClose={() => setError(null)} severity="error" variant="filled">
+          {error}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

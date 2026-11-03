@@ -16,3 +16,9 @@ data/
 
 # OS
 .DS_Store
+
+# Playwright
+test-results/
+playwright-report/
+playwright/.cache/
+

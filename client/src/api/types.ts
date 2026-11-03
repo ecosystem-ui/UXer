@@ -9,8 +9,18 @@ export interface Project {
   id: string;
   name: string;
   owner_id: string;
+  owner_name?: string;
+  role?: 'owner' | 'viewer';
   created_at: string;
   updated_at: string;
+}
+
+export interface ProjectMember {
+  user_id: string;
+  email: string;
+  name: string;
+  role: string;
+  created_at: string;
 }
 
 export interface Version {
@@ -41,6 +51,8 @@ export interface Comment {
   selector: string;
   text_excerpt: string;
   page_url: string;
+  /** Wizard step id/label (captured from a stepper) so navigation can replay it. */
+  step: string;
   x: number;
   y: number;
   body: string;
