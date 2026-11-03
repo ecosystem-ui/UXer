@@ -1,8 +1,7 @@
 export interface User {
   id: string;
-  login: string;
+  email: string;
   name: string;
-  avatar_url: string;
   created_at: string;
 }
 
@@ -41,6 +40,7 @@ export interface Comment {
   version_id: string;
   selector: string;
   text_excerpt: string;
+  page_url: string;
   x: number;
   y: number;
   body: string;

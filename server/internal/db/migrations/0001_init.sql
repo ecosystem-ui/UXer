@@ -1,9 +1,8 @@
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
-  github_id INTEGER UNIQUE NOT NULL,
-  login TEXT NOT NULL,
+  email TEXT UNIQUE NOT NULL,
   name TEXT NOT NULL DEFAULT '',
-  avatar_url TEXT NOT NULL DEFAULT '',
+  password_hash TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
 

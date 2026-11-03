@@ -18,6 +18,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export interface NewCommentInput {
   selector: string;
   text_excerpt: string;
+  page_url: string;
   x: number;
   y: number;
   body: string;
@@ -26,6 +27,16 @@ export interface NewCommentInput {
 export const api = {
   me: () => request<User | null>('/auth/me'),
   logout: () => request<{ ok: boolean }>('/auth/logout', { method: 'POST' }),
+  signup: (email: string, password: string, name?: string) =>
+    request<User>('/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify({ email, password, name }),
+    }),
+  login: (email: string, password: string) =>
+    request<User>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
 
   listProjects: () => request<Project[]>('/projects'),
   createProject: (name: string) =>

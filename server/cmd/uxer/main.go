@@ -66,16 +66,10 @@ func getenv(key, fallback string) string {
 	return fallback
 }
 
-// loadDotEnv locates a `.env` file and loads it without overriding variables
-// already set in the environment. It searches the current working directory
-// first, then walks up parent directories, so it works whether the server is
-// run from `UXer/` or `UXer/server/`.
+// loadDotEnv reads a `.env` file from the working directory if present,
+// without overriding variables already set in the environment.
 func loadDotEnv() {
-	path := findDotEnv()
-	if path == "" {
-		return
-	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(".env")
 	if err != nil {
 		return
 	}
@@ -93,25 +87,5 @@ func loadDotEnv() {
 		if os.Getenv(key) == "" {
 			os.Setenv(key, val)
 		}
-	}
-}
-
-// findDotEnv returns the first `.env` found from the working directory up to
-// the filesystem root, or "" if none exists.
-func findDotEnv() string {
-	dir, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	for {
-		candidate := filepath.Join(dir, ".env")
-		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
-			return candidate
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return ""
-		}
-		dir = parent
 	}
 }

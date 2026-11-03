@@ -5,7 +5,8 @@ import type { User } from '../api/types';
 interface AuthState {
   user: User | null;
   loading: boolean;
-  login: () => void;
+  login: (email: string, password: string) => Promise<void>;
+  signup: (email: string, password: string, name?: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -23,30 +24,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, []);
 
-  // When the GitHub popup finishes, refresh the session without a reload.
-  useEffect(() => {
-    const onMsg = (e: MessageEvent) => {
-      if (e.data?.type === 'uxer-auth' && e.data.ok) {
-        api
-          .me()
-          .then(setUser)
-          .catch(() => setUser(null));
-      }
-    };
-    window.addEventListener('message', onMsg);
-    return () => window.removeEventListener('message', onMsg);
-  }, []);
+  const login = async (email: string, password: string) => {
+    const u = await api.login(email, password);
+    setUser(u);
+  };
 
-  const login = () => {
-    const popup = window.open(
-      '/api/auth/github?popup=1',
-      'uxer-github-auth',
-      'width=600,height=700,popup=yes'
-    );
-    if (!popup) {
-      // Popup blocked: fall back to a full-page redirect.
-      window.location.href = '/api/auth/github';
-    }
+  const signup = async (email: string, password: string, name?: string) => {
+    const u = await api.signup(email, password, name);
+    setUser(u);
   };
 
   const logout = async () => {
@@ -54,12 +39,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await api.logout();
     } finally {
       setUser(null);
-      window.location.href = '/login';
     }
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, signup, logout }}>
       {children}
     </AuthContext.Provider>
   );

@@ -1,9 +1,9 @@
 package api
 
 import (
-	"crypto/rand"
-	"encoding/hex"
+	"encoding/json"
 	"net/http"
+	"strings"
 
 	"uxer/internal/auth"
 	"uxer/internal/db"
@@ -28,126 +28,99 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-func (s *Server) handleGithubLogin(w http.ResponseWriter, r *http.Request) {
-	if s.Auth.OAuth.ClientID == "" {
-		writeError(w, http.StatusServiceUnavailable, "GITHUB_CLIENT_ID is not configured")
-		return
+// handleSignup creates a new user with an email + password.
+func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+		Name     string `json:"name"`
 	}
-	state := randomState()
-	if err := s.Auth.SetOAuthState(w, r, state); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to persist state")
-		return
-	}
-	if err := s.Auth.SetOAuthPopup(w, r, r.URL.Query().Get("popup") == "1"); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to persist popup flag")
-		return
-	}
-	http.Redirect(w, r, s.Auth.AuthCodeURL(state), http.StatusFound)
-}
-
-func (s *Server) handleGithubCallback(w http.ResponseWriter, r *http.Request) {
-	want, err := s.Auth.GetOAuthState(r)
-	if err != nil || want == "" {
-		writeError(w, http.StatusBadRequest, "missing oauth state")
-		return
-	}
-	got := r.URL.Query().Get("state")
-	if got == "" || got != want {
-		writeError(w, http.StatusBadRequest, "invalid oauth state")
-		return
-	}
-	popup := s.Auth.GetOAuthPopup(r)
-	_ = s.Auth.ClearOAuthState(w, r)
-	_ = s.Auth.ClearOAuthPopup(w, r)
-
-	code := r.URL.Query().Get("code")
-	if code == "" {
-		writeError(w, http.StatusBadRequest, "missing code")
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 
-	token, err := s.Auth.Exchange(r.Context(), code)
+	email := strings.ToLower(strings.TrimSpace(body.Email))
+	if !validEmail(email) {
+		writeError(w, http.StatusBadRequest, "a valid email is required")
+		return
+	}
+	if len(body.Password) < 6 {
+		writeError(w, http.StatusBadRequest, "password must be at least 6 characters")
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		name = email // fall back to the email local part for display
+	}
+
+	var exists int
+	_ = s.DB.SQL.QueryRow(`SELECT COUNT(1) FROM users WHERE email = ?`, email).Scan(&exists)
+	if exists > 0 {
+		writeError(w, http.StatusConflict, "an account with this email already exists")
+		return
+	}
+
+	hash, err := auth.HashPassword(body.Password)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "token exchange failed")
-		return
-	}
-	gh, err := s.Auth.FetchUser(r.Context(), token)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "failed to load GitHub profile")
+		writeError(w, http.StatusInternalServerError, "failed to hash password")
 		return
 	}
 
-	userID, err := s.upsertUser(gh)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to save user")
+	id := db.NewID()
+	ts := now()
+	if _, err := s.DB.SQL.Exec(
+		`INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)`,
+		id, email, name, hash, ts,
+	); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create account")
 		return
 	}
-	if err := s.Auth.SetUserID(w, r, userID); err != nil {
+	if err := s.Auth.SetUserID(w, r, id); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create session")
 		return
 	}
 
-	if popup {
-		writePopupSuccessPage(w)
+	writeJSON(w, http.StatusCreated, db.User{ID: id, Email: email, Name: name, CreatedAt: ts})
+}
+
+// handleLogin authenticates an email + password.
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusFound)
-}
+	email := strings.ToLower(strings.TrimSpace(body.Email))
 
-// writePopupSuccessPage renders a small page for the popup window that
-// notifies the opener and closes itself.
-func writePopupSuccessPage(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(`<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Sign-in complete</title>
-<style>
-  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; text-align: center; padding-top: 48px; color: #333; }
-</style>
-</head>
-<body>
-<p>Sign-in complete. You can close this window.</p>
-<script>
-  (function () {
-    try {
-      if (window.opener) {
-        window.opener.postMessage({ type: 'uxer-auth', ok: true }, window.location.origin);
-      }
-    } catch (e) {}
-    window.close();
-  })();
-</script>
-</body>
-</html>`))
-}
-
-func (s *Server) upsertUser(gh *auth.GitHubUser) (string, error) {
-	var id string
-	err := s.DB.SQL.QueryRow(`SELECT id FROM users WHERE github_id = ?`, gh.ID).Scan(&id)
-	if err == nil {
-		// Existing user: refresh profile fields.
-		_, uerr := s.DB.SQL.Exec(
-			`UPDATE users SET login = ?, name = ?, avatar_url = ? WHERE id = ?`,
-			gh.Login, gh.Name, gh.AvatarURL, id,
-		)
-		return id, uerr
+	var u db.User
+	err := s.DB.SQL.QueryRow(
+		`SELECT id, email, name, password_hash, created_at FROM users WHERE email = ?`, email,
+	).Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.CreatedAt)
+	if err != nil || !auth.CheckPassword(u.PasswordHash, body.Password) {
+		writeError(w, http.StatusUnauthorized, "invalid email or password")
+		return
 	}
 
-	id = db.NewID()
-	_, err = s.DB.SQL.Exec(
-		`INSERT INTO users (id, github_id, login, name, avatar_url, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		id, gh.ID, gh.Login, gh.Name, gh.AvatarURL, now(),
-	)
-	return id, err
+	if err := s.Auth.SetUserID(w, r, u.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create session")
+		return
+	}
+
+	u.PasswordHash = ""
+	writeJSON(w, http.StatusOK, u)
 }
 
-func randomState() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "state"
+func validEmail(e string) bool {
+	if len(e) < 3 || !strings.Contains(e, "@") {
+		return false
 	}
-	return hex.EncodeToString(b)
+	parts := strings.SplitN(e, "@", 2)
+	if len(parts) != 2 || parts[0] == "" || !strings.Contains(parts[1], ".") {
+		return false
+	}
+	return true
 }

@@ -34,8 +34,8 @@ func (s *Server) Routes(static http.Handler) http.Handler {
 	// auth (no session required)
 	mux.HandleFunc("GET /api/auth/me", s.handleMe)
 	mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
-	mux.HandleFunc("GET /api/auth/github", s.handleGithubLogin)
-	mux.HandleFunc("GET /api/auth/github/callback", s.handleGithubCallback)
+	mux.HandleFunc("POST /api/auth/signup", s.handleSignup)
+	mux.HandleFunc("POST /api/auth/login", s.handleLogin)
 
 	// projects
 	mux.HandleFunc("GET /api/projects", s.requireUser(s.handleListProjects))
@@ -59,7 +59,8 @@ func (s *Server) Routes(static http.Handler) http.Handler {
 
 	// proxy
 	mux.HandleFunc("GET /proxy", s.Proxy.HandleProxy)
-	mux.HandleFunc("GET /__uxer__/res", s.Proxy.HandleRes)
+	mux.HandleFunc("GET /__uxer__/p/{b64}", s.Proxy.HandlePath)
+	mux.HandleFunc("GET /__uxer__/p/{b64}/{rest...}", s.Proxy.HandlePath)
 	mux.HandleFunc("GET /__uxer__/bridge.js", s.Proxy.HandleBridge)
 
 	if static != nil {
@@ -99,11 +100,12 @@ func userFrom(r *http.Request) *db.User {
 func (s *Server) loadUser(id string) (*db.User, error) {
 	var u db.User
 	err := s.DB.SQL.QueryRow(
-		`SELECT id, github_id, login, name, avatar_url, created_at FROM users WHERE id = ?`, id,
-	).Scan(&u.ID, &u.GithubID, &u.Login, &u.Name, &u.AvatarURL, &u.CreatedAt)
+		`SELECT id, email, name, password_hash, created_at FROM users WHERE id = ?`, id,
+	).Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
+	u.PasswordHash = ""
 	return &u, nil
 }
 

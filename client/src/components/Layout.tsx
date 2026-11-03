@@ -33,17 +33,17 @@ export default function Layout({ children }: { children: ReactNode }) {
           </Typography>
           {user && (
             <>
-              <Tooltip title={user.name || user.login}>
+              <Tooltip title={user.name || user.email}>
                 <IconButton onClick={(e) => setAnchor(e.currentTarget)}>
-                  <Avatar src={user.avatar_url} alt={user.login} sx={{ width: 34, height: 34 }}>
-                    {(user.login || '?').charAt(0).toUpperCase()}
+                  <Avatar sx={{ width: 34, height: 34, bgcolor: 'primary.main' }}>
+                    {(user.name || user.email || '?').charAt(0).toUpperCase()}
                   </Avatar>
                 </IconButton>
               </Tooltip>
               <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}>
                 <MenuItem disabled sx={{ opacity: 1 }}>
                   <Typography variant="body2" color="text.primary" fontWeight={500}>
-                    {user.name || user.login}
+                    {user.name || user.email}
                   </Typography>
                 </MenuItem>
                 <MenuItem

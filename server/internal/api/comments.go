@@ -17,9 +17,9 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := s.DB.SQL.Query(
-		`SELECT c.id, c.version_id, c.selector, c.text_excerpt, c.x, c.y, c.body,
+		`SELECT c.id, c.version_id, c.selector, c.text_excerpt, c.page_url, c.x, c.y, c.body,
 		        c.status, c.author_id, c.created_at, c.resolved_at, c.resolved_version_id,
-		        u.login, u.name, u.avatar_url
+		        u.email, u.name
 		 FROM comments c JOIN users u ON u.id = c.author_id
 		 WHERE c.version_id = ? ORDER BY c.created_at ASC`, v.ID,
 	)
@@ -33,14 +33,15 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var c db.Comment
 		var author db.User
-		if err := rows.Scan(&c.ID, &c.VersionID, &c.Selector, &c.TextExcerpt, &c.X, &c.Y, &c.Body,
+		if err := rows.Scan(&c.ID, &c.VersionID, &c.Selector, &c.TextExcerpt, &c.PageURL, &c.X, &c.Y, &c.Body,
 			&c.Status, &c.AuthorID, &c.CreatedAt, &c.ResolvedAt, &c.ResolvedVersionID,
-			&author.Login, &author.Name, &author.AvatarURL); err != nil {
+			&author.Email, &author.Name); err != nil {
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}
 		author.ID = c.AuthorID
 		c.Author = &author
+		c.Replies = []db.Reply{}
 		comments = append(comments, c)
 	}
 
@@ -63,7 +64,7 @@ func (s *Server) attachReplies(comments []db.Comment) error {
 
 	rows, err := s.DB.SQL.Query(
 		`SELECT r.id, r.comment_id, r.author_id, r.body, r.created_at,
-		        u.login, u.name, u.avatar_url
+		        u.email, u.name
 		 FROM replies r JOIN users u ON u.id = r.author_id
 		 WHERE r.comment_id IN (`+placeholders(len(ids))+`) ORDER BY r.created_at ASC`,
 		argsAny(ids)...,
@@ -77,7 +78,7 @@ func (s *Server) attachReplies(comments []db.Comment) error {
 		var r db.Reply
 		var author db.User
 		if err := rows.Scan(&r.ID, &r.CommentID, &r.AuthorID, &r.Body, &r.CreatedAt,
-			&author.Login, &author.Name, &author.AvatarURL); err != nil {
+			&author.Email, &author.Name); err != nil {
 			return err
 		}
 		author.ID = r.AuthorID
@@ -101,6 +102,7 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Selector    string  `json:"selector"`
 		TextExcerpt string  `json:"text_excerpt"`
+		PageURL     string  `json:"page_url"`
 		X           float64 `json:"x"`
 		Y           float64 `json:"y"`
 		Body        string  `json:"body"`
@@ -121,9 +123,9 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 	id := db.NewID()
 	ts := now()
 	if _, err := s.DB.SQL.Exec(
-		`INSERT INTO comments (id, version_id, selector, text_excerpt, x, y, body, status, author_id, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`,
-		id, v.ID, body.Selector, body.TextExcerpt, body.X, body.Y, strings.TrimSpace(body.Body), u.ID, ts,
+		`INSERT INTO comments (id, version_id, selector, text_excerpt, page_url, x, y, body, status, author_id, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`,
+		id, v.ID, body.Selector, body.TextExcerpt, body.PageURL, body.X, body.Y, strings.TrimSpace(body.Body), u.ID, ts,
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, "create failed")
 		return
@@ -235,13 +237,13 @@ func (s *Server) loadComment(id string, _ *db.User) *db.Comment {
 	var c db.Comment
 	var author db.User
 	err := s.DB.SQL.QueryRow(
-		`SELECT c.id, c.version_id, c.selector, c.text_excerpt, c.x, c.y, c.body,
+		`SELECT c.id, c.version_id, c.selector, c.text_excerpt, c.page_url, c.x, c.y, c.body,
 		        c.status, c.author_id, c.created_at, c.resolved_at, c.resolved_version_id,
-		        u.login, u.name, u.avatar_url
+		        u.email, u.name
 		 FROM comments c JOIN users u ON u.id = c.author_id WHERE c.id = ?`, id,
-	).Scan(&c.ID, &c.VersionID, &c.Selector, &c.TextExcerpt, &c.X, &c.Y, &c.Body,
+	).Scan(&c.ID, &c.VersionID, &c.Selector, &c.TextExcerpt, &c.PageURL, &c.X, &c.Y, &c.Body,
 		&c.Status, &c.AuthorID, &c.CreatedAt, &c.ResolvedAt, &c.ResolvedVersionID,
-		&author.Login, &author.Name, &author.AvatarURL)
+		&author.Email, &author.Name)
 	if err != nil {
 		return nil
 	}
@@ -252,7 +254,7 @@ func (s *Server) loadComment(id string, _ *db.User) *db.Comment {
 	// load replies
 	rows, err := s.DB.SQL.Query(
 		`SELECT r.id, r.comment_id, r.author_id, r.body, r.created_at,
-		        u.login, u.name, u.avatar_url
+		        u.email, u.name
 		 FROM replies r JOIN users u ON u.id = r.author_id
 		 WHERE r.comment_id = ? ORDER BY r.created_at ASC`, id,
 	)
@@ -261,7 +263,7 @@ func (s *Server) loadComment(id string, _ *db.User) *db.Comment {
 		for rows.Next() {
 			var r db.Reply
 			var a db.User
-			if rows.Scan(&r.ID, &r.CommentID, &r.AuthorID, &r.Body, &r.CreatedAt, &a.Login, &a.Name, &a.AvatarURL) == nil {
+			if rows.Scan(&r.ID, &r.CommentID, &r.AuthorID, &r.Body, &r.CreatedAt, &a.Email, &a.Name) == nil {
 				a.ID = r.AuthorID
 				r.Author = &a
 				c.Replies = append(c.Replies, r)

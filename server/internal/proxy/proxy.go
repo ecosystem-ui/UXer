@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	_ "embed"
+	"encoding/base64"
 	"errors"
 	"io"
 	"net"
@@ -76,17 +77,11 @@ func (h *Handler) HandleBridge(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(bridgeJS)
 }
 
-// HandleProxy serves the top-level design page with the bridge injected.
+// HandleProxy is the entry point. The design URL is passed via ?url=. We
+// redirect to a path-preserving URL so that the document's pathname carries
+// the app's deployment base path — this lets the SPA router's basename match
+// after the JS rewrite.
 func (h *Handler) HandleProxy(w http.ResponseWriter, r *http.Request) {
-	h.serve(w, r, true)
-}
-
-// HandleRes serves a rewritten subresource (image/CSS/JS/HTML/font).
-func (h *Handler) HandleRes(w http.ResponseWriter, r *http.Request) {
-	h.serve(w, r, false)
-}
-
-func (h *Handler) serve(w http.ResponseWriter, r *http.Request, inject bool) {
 	target := r.URL.Query().Get("url")
 	if target == "" {
 		http.Error(w, "missing url parameter", http.StatusBadRequest)
@@ -97,10 +92,62 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, inject bool) {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
-	h.fetchAndRewrite(w, r, u, inject)
+
+	origin := u.Scheme + "://" + u.Host
+	basePath := basePathOf(u)
+	b64 := encodeRoute(origin, basePath)
+
+	// Preserve the exact path so the SPA router matches the same route the
+	// user was on. Only the app's base path itself gets a trailing slash,
+	// so a bare directory URL (e.g. /osac-ux) matches the router basename.
+	p := u.Path
+	if p == "" || p == "/" {
+		p = "/"
+	} else if basePath != "/" && p == strings.TrimSuffix(basePath, "/") {
+		p += "/"
+	}
+
+	dest := "/__uxer__/p/" + b64 + p
+	if u.RawQuery != "" {
+		dest += "?" + u.RawQuery
+	}
+	if u.Fragment != "" {
+		dest += "#" + u.Fragment
+	}
+	http.Redirect(w, r, dest, http.StatusFound)
 }
 
-func (h *Handler) fetchAndRewrite(w http.ResponseWriter, r *http.Request, u *url.URL, inject bool) {
+// HandlePath serves a path-preserving subresource or nested page
+// (/__uxer__/p/{b64}/{rest...}). The base64 blob encodes both the origin and
+// the app's deployment base path (separated by a newline).
+func (h *Handler) HandlePath(w http.ResponseWriter, r *http.Request) {
+	b64 := r.PathValue("b64")
+	rest := r.PathValue("rest")
+
+	origin, basePath, err := decodeRoute(b64)
+	if err != nil {
+		http.Error(w, "invalid proxy path", http.StatusBadRequest)
+		return
+	}
+
+	target := origin + "/" + rest
+	if q := r.URL.RawQuery; q != "" {
+		target += "?" + q
+	}
+
+	u, err := validateURL(target, h.allow)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+
+	prefix := "/__uxer__/p/" + b64
+	proxiedBase := prefix + basePath
+	h.serveURL(w, r, u, origin, basePath, prefix, proxiedBase)
+}
+
+// serveURL fetches the target and rewrites it in place.
+func (h *Handler) serveURL(w http.ResponseWriter, r *http.Request, u *url.URL, origin, basePath, prefix, proxiedBase string) {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, u.String(), nil)
 	if err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -146,9 +193,15 @@ func (h *Handler) fetchAndRewrite(w http.ResponseWriter, r *http.Request, u *url
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 
-	switch mediaType {
-	case "text/html":
-		out, rerr := rewriteHTML(body, u, inject)
+	isJS := mediaType == "text/javascript" || mediaType == "application/javascript" ||
+		mediaType == "application/x-javascript" || mediaType == "text/ecmascript" ||
+		mediaType == "application/ecmascript" ||
+		strings.HasSuffix(strings.ToLower(u.Path), ".js") ||
+		strings.HasSuffix(strings.ToLower(u.Path), ".mjs")
+
+	switch {
+	case mediaType == "text/html":
+		out, rerr := rewriteHTML(body, origin, prefix, proxiedBase, u)
 		if rerr != nil {
 			http.Error(w, "rewrite failed", http.StatusBadGateway)
 			return
@@ -156,9 +209,15 @@ func (h *Handler) fetchAndRewrite(w http.ResponseWriter, r *http.Request, u *url
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(out)
-	case "text/css":
+	case isJS:
 		raw, _ := io.ReadAll(body)
-		out := []byte(rewriteCSS(string(raw), u))
+		out := rewriteJS(raw, basePath, proxiedBase)
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		w.WriteHeader(resp.StatusCode)
+		_, _ = w.Write(out)
+	case mediaType == "text/css":
+		raw, _ := io.ReadAll(body)
+		out := []byte(rewriteCSS(string(raw), origin, prefix))
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(out)
@@ -166,4 +225,25 @@ func (h *Handler) fetchAndRewrite(w http.ResponseWriter, r *http.Request, u *url
 		w.WriteHeader(resp.StatusCode)
 		_, _ = io.Copy(w, body)
 	}
+}
+
+// encodeRoute packs origin and base path into a URL-safe token.
+func encodeRoute(origin, basePath string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(origin + "\n" + basePath))
+}
+
+// decodeRoute unpacks a route token into origin and base path.
+func decodeRoute(b64 string) (origin, basePath string, err error) {
+	raw, err := base64.RawURLEncoding.DecodeString(b64)
+	if err != nil {
+		return "", "", err
+	}
+	parts := strings.SplitN(string(raw), "\n", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", errors.New("malformed route token")
+	}
+	if !strings.HasPrefix(parts[0], "http://") && !strings.HasPrefix(parts[0], "https://") {
+		return "", "", errors.New("malformed route origin")
+	}
+	return parts[0], parts[1], nil
 }

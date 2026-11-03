@@ -1,0 +1,1 @@
+ALTER TABLE comments ADD COLUMN page_url TEXT NOT NULL DEFAULT '';

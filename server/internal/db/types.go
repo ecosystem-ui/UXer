@@ -17,12 +17,11 @@ func NewID() string {
 }
 
 type User struct {
-	ID        string `json:"id"`
-	GithubID  int64  `json:"-"`
-	Login     string `json:"login"`
-	Name      string `json:"name"`
-	AvatarURL string `json:"avatar_url"`
-	CreatedAt string `json:"created_at"`
+	ID           string `json:"id"`
+	Email        string `json:"email"`
+	Name         string `json:"name"`
+	PasswordHash string `json:"-"`
+	CreatedAt    string `json:"created_at"`
 }
 
 type Project struct {
@@ -58,6 +57,7 @@ type Comment struct {
 	VersionID         string  `json:"version_id"`
 	Selector          string  `json:"selector"`
 	TextExcerpt       string  `json:"text_excerpt"`
+	PageURL           string  `json:"page_url"`
 	X                 float64 `json:"x"`
 	Y                 float64 `json:"y"`
 	Body              string  `json:"body"`

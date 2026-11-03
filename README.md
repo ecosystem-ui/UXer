@@ -5,7 +5,7 @@ design URL), preview that URL in an iframe, drop comments anchored to DOM
 elements, run discussion threads, and resolve comments against a version.
 
 - **Frontend**: React + Vite + TypeScript + MUI (Material UI)
-- **Backend**: Go (`net/http`), SQLite (`modernc.org/sqlite`), GitHub OAuth
+- **Backend**: Go (`net/http`), SQLite (`modernc.org/sqlite`), email + password auth (bcrypt)
 - **Preview**: a reverse proxy that rewrites the design URL into an
   iframe-embeddable page and injects an annotation bridge
 
@@ -29,23 +29,15 @@ UXer/
 
 ## Setup
 
-### 1. Configure GitHub OAuth
-
-Create a GitHub OAuth App at
-<https://github.com/settings/developers> with:
-
-- **Homepage URL**: `http://localhost:5173`
-- **Authorization callback URL**: `http://localhost:5173/api/auth/github/callback`
-
-Then create the environment file:
+### 1. Configure the environment
 
 ```bash
 cd UXer
 cp .env.example .env
 ```
 
-Fill in `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and a random `SESSION_SECRET`
-(e.g. `openssl rand -hex 32`).
+Set a random `SESSION_SECRET` (e.g. `openssl rand -hex 32`). No external OAuth
+provider is needed — users sign up and sign in with **email + password**.
 
 ### 2. Install frontend dependencies
 
@@ -85,7 +77,7 @@ go build -o uxer ./cmd/uxer
 
 ## Usage
 
-1. Sign in with GitHub.
+1. Sign up with an email + password, then sign in.
 2. Create a **project**.
 3. Add a **version** — a label plus the public design URL (page, prototype,
    Storybook, Figma link, etc.).
@@ -97,7 +89,9 @@ go build -o uxer ./cmd/uxer
 ## Preview proxy & limitations
 
 The `/proxy?url=…` endpoint fetches the design URL server-side, rewrites
-same-origin links/scripts/styles through `/__uxer__/res`, strips
+same-origin links/scripts/styles through a **path-preserving** subresource
+route (`/__uxer__/p/<origin>/<path>`), injects a `<base>` so relative JS
+`import()`/CSS `url()`/HTML references resolve correctly, strips
 `X-Frame-Options`/`Content-Security-Policy`, and injects the annotation bridge.
 It guards against SSRF (only global-unicast addresses are reachable).
 
@@ -119,8 +113,6 @@ Known limitations (documented, not blockers):
 | --- | --- |
 | `UXER_PORT` | Go server port (default `8080`) |
 | `UXER_DB_PATH` | SQLite file (default `data/uxer.db`) |
-| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth App credentials |
-| `GITHUB_CALLBACK_URL` | OAuth callback (default `http://localhost:5173/api/auth/github/callback`) |
 | `SESSION_SECRET` | Signing secret for session cookies |
 | `UXER_SECURE_COOKIE` | `1` to mark session cookies `Secure` (HTTPS only) |
 | `ALLOW_PRIVATE_HOSTS` | Comma-separated hosts that bypass the SSRF guard (e.g. `localhost`) |

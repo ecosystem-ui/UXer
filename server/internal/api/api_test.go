@@ -24,8 +24,8 @@ func newTestServer(t *testing.T) (*Server, http.Handler, *http.Cookie) {
 
 	uid := "user-1"
 	if _, err := d.SQL.Exec(
-		`INSERT INTO users (id, github_id, login, name, avatar_url, created_at)
-		 VALUES (?, 1, 'lia', 'Lia', '', '2026-01-01T00:00:00Z')`,
+		`INSERT INTO users (id, email, name, password_hash, created_at)
+		 VALUES (?, 'lia@example.com', 'Lia', 'hash', '2026-01-01T00:00:00Z')`,
 		uid,
 	); err != nil {
 		t.Fatalf("insert user: %v", err)
@@ -144,5 +144,64 @@ func TestEndToEndFlow(t *testing.T) {
 	rec = do(h, cookie, http.MethodPatch, "/api/comments/"+comment.ID, `{"status":"open"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reopen comment: %d", rec.Code)
+	}
+}
+
+func TestSignupAndLogin(t *testing.T) {
+	_, h, _ := newTestServer(t)
+
+	// Signup creates a session and returns the user.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/signup",
+		strings.NewReader(`{"email":"new@example.com","password":"secret123","name":"New User"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("signup: %d %s", rec.Code, rec.Body.String())
+	}
+	var created db.User
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+	if created.Email != "new@example.com" || created.Name != "New User" {
+		t.Fatalf("unexpected signup response: %+v", created)
+	}
+	if created.PasswordHash != "" {
+		t.Fatal("password hash must not be returned")
+	}
+	signupCookie := rec.Result().Cookies()[0]
+
+	// Duplicate email is rejected.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/signup",
+		strings.NewReader(`{"email":"new@example.com","password":"secret123"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("duplicate signup: expected 409, got %d", rec.Code)
+	}
+
+	// Login with the correct password works.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/login",
+		strings.NewReader(`{"email":"new@example.com","password":"secret123"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Login with a wrong password is rejected.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/login",
+		strings.NewReader(`{"email":"new@example.com","password":"wrong"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("bad login: expected 401, got %d", rec.Code)
+	}
+
+	// /me returns the authenticated user via the signup cookie.
+	rec = do(h, signupCookie, http.MethodGet, "/api/auth/me", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("me: %d", rec.Code)
 	}
 }

@@ -11,7 +11,11 @@
   window.__UXER_BRIDGE__ = true;
 
   var config = window.__UXER__ || {};
-  var base = config.base || window.location.origin;
+  var base = config.base || window.location.href;
+  var origin = config.origin || (function () {
+    try { return new URL(base).origin; } catch (e) { return window.location.origin; }
+  })();
+  var prefix = config.prefix || '/__uxer__/p/';
   var mode = 'browse';
   var pins = [];
   var activeHighlight = null;
@@ -26,20 +30,77 @@
     } catch (e) {}
   }
 
-  function resolveUrl(u) {
-    try { return new URL(u, base).href; } catch (e) { return u; }
+  // Extract the pathname from any URL form (absolute, root-relative, or
+  // relative), without query or hash.
+  function pathOf(u) {
+    try { return new URL(u, base).pathname; } catch (e) {
+      var p = String(u);
+      var q = p.indexOf('?'); if (q >= 0) p = p.slice(0, q);
+      var h = p.indexOf('#'); if (h >= 0) p = p.slice(0, h);
+      return p;
+    }
+  }
+
+  // Is this URL already in path-preserving proxied form (path or absolute)?
+  function isProxied(u) {
+    return typeof u === 'string' && pathOf(u).indexOf(prefix) === 0;
+  }
+
+  // Map a URL back to the real origin design URL. Handles proxied absolute
+  // URLs (e.g. window.location.href) and proxied paths alike.
+  function designUrl(u) {
+    if (typeof u !== 'string') return u;
+    try {
+      var a = new URL(u, base);
+      var path = a.pathname;
+      if (path.indexOf(prefix) === 0) {
+        return origin + path.slice(prefix.length) + a.search + a.hash;
+      }
+      return a.href;
+    } catch (e) { return u; }
+  }
+
+  // Normalize a design URL to a comparable key: origin + pathname (trailing
+  // slash stripped) + search. Hash is ignored so in-page anchor changes keep
+  // the same pins visible.
+  function pageKey(u) {
+    if (typeof u !== 'string' || !u) return '';
+    try {
+      var a = new URL(u, base);
+      var p = a.pathname;
+      if (p.length > 1 && p.charAt(p.length - 1) === '/') p = p.slice(0, -1);
+      return a.origin + p + a.search;
+    } catch (e) { return String(u); }
+  }
+
+  // The design URL of the page currently shown in the iframe.
+  function currentPage() {
+    return pageKey(designUrl(window.location.href));
   }
 
   function isSameOrigin(u) {
+    if (typeof u === 'string' && isProxied(u)) return true;
     try {
-      var a = new URL(u, base);
-      var b = new URL(base);
-      return a.protocol === b.protocol && a.host === b.host;
+      return new URL(u, base).origin === origin;
     } catch (e) { return false; }
   }
 
+  // Map a URL onto the path-preserving proxy; already-proxied and
+  // cross-origin URLs pass through unchanged.
   function resUrl(u) {
-    return '/__uxer__/res?url=' + encodeURIComponent(resolveUrl(u));
+    if (typeof u === 'string') {
+      if (isProxied(u)) return u;
+      if (u.charAt(0) === '/') {
+        var a = new URL(u, base);
+        if (a.origin === origin) return prefix + a.pathname + a.search;
+        return u;
+      }
+    }
+    try {
+      var b = new URL(u, base);
+      if (b.origin !== origin) return b.href;
+      return prefix + b.pathname + b.search;
+    } catch (e) { return u; }
   }
 
   /* ---------- selector + capture ---------- */
@@ -112,6 +173,7 @@
     return {
       selector: uniqueSelector(el),
       text: textExcerpt(el),
+      url: designUrl(window.location.href),
       x: Math.min(1, Math.max(0, x)),
       y: Math.min(1, Math.max(0, y))
     };
@@ -161,8 +223,12 @@
   function renderPins() {
     if (!mountOverlay()) return;
     pinsLayer.innerHTML = '';
+    var cur = currentPage();
     for (var i = 0; i < pins.length; i++) {
       var p = pins[i];
+      // Only render pins that belong to the current page. Pins with no url
+      // (legacy) are shown everywhere.
+      if (p.url && cur && pageKey(p.url) !== cur) continue;
       var el = null;
       try { el = document.querySelector(p.selector); } catch (e) {}
       if (!el) continue;
@@ -228,6 +294,8 @@
       renderPins();
     } else if (d.type === 'focus') {
       focusSelector(d.selector);
+    } else if (d.type === 'navigate') {
+      navigateTo(d.url, d.selector);
     }
   });
 
@@ -237,15 +305,41 @@
     if (highlightTimer) { clearTimeout(highlightTimer); highlightTimer = null; }
   }
 
-  function focusSelector(selector) {
+  function focusSelector(selector, retries) {
+    if (typeof retries !== 'number') retries = 0;
     var el = null;
     try { el = document.querySelector(selector); } catch (e) {}
-    if (!el) return;
+    if (!el) {
+      if (retries > 0) {
+        setTimeout(function () { focusSelector(selector, retries - 1); }, 150);
+      }
+      return;
+    }
     try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
     activeHighlight = selector;
     positionHighlight(el);
     if (highlightTimer) clearTimeout(highlightTimer);
     highlightTimer = setTimeout(clearHighlight, 2500);
+  }
+
+  // Client-side navigate the SPA to a design URL (same origin), then focus
+  // an element. SPA deep links aren't served by the origin (e.g. GitHub
+  // Pages), so we drive the router in place instead of a full reload.
+  function navigateTo(url, selector) {
+    try {
+      var a = new URL(url, base);
+      if (a.origin !== origin) return false;
+      var path = prefix + a.pathname + a.search + a.hash;
+      var cur = window.location.pathname + window.location.search + window.location.hash;
+      if (path !== cur) {
+        // pushState goes through the patched version, which updates `base`
+        // and notifies the parent. The popstate triggers the router.
+        history.pushState({}, '', path);
+        window.dispatchEvent(new PopStateEvent('popstate', { state: history.state }));
+      }
+      if (selector) focusSelector(selector, 30);
+      return true;
+    } catch (e) { return false; }
   }
 
   /* ---------- SPA proxying ---------- */
@@ -281,36 +375,41 @@
     history.pushState = function (state, title, url) {
       var target = url;
       if (url) {
-        var abs = resolveUrl(url);
-        base = abs;
-        post('location', { url: abs });
-        target = '/proxy?url=' + encodeURIComponent(abs);
+        base = designUrl(url);
+        post('location', { url: base });
+        // Keep the URL as-is: the app's router already emits the
+        // path-preserving proxied path (its basename was rewritten).
       }
       return op.call(this, state, title, target);
     };
     history.replaceState = function (state, title, url) {
       var target = url;
       if (url) {
-        var abs = resolveUrl(url);
-        base = abs;
-        post('location', { url: abs });
-        target = '/proxy?url=' + encodeURIComponent(abs);
+        base = designUrl(url);
+        post('location', { url: base });
       }
       return or.call(this, state, title, target);
     };
     window.addEventListener('popstate', function () {
-      post('location', { url: window.location.href });
+      base = designUrl(window.location.pathname + window.location.search);
+      post('location', { url: base });
     });
+    window.addEventListener('hashchange', function () {
+      base = designUrl(window.location.href);
+      post('location', { url: base });
+    });
+  }
+
+  // Reverse-map a proxied URL back to the real origin URL (for window.open).
+  function unproxied(u) {
+    return designUrl(u);
   }
 
   function patchOpen() {
     var ow = window.open;
     if (typeof ow !== 'function') return;
     window.open = function (url) {
-      var abs = url ? resolveUrl(url) : url;
-      if (abs && abs.indexOf(window.location.origin + '/__uxer__/res?url=') === 0) {
-        abs = decodeURIComponent(abs.split('url=').slice(1).join('url='));
-      }
+      var abs = url ? unproxied(url) : url;
       return ow.call(window, abs || '', '_blank');
     };
   }
@@ -333,7 +432,7 @@
 
   function ready() {
     if (mountOverlay()) {
-      post('ready', { url: base });
+      post('ready', { url: base, prefix: prefix });
       renderPins();
     }
   }
