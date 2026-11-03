@@ -16,7 +16,7 @@ import (
 func main() {
 	loadDotEnv()
 
-	port := getenv("UXER_PORT", "8080")
+	port := getenv("UXER_PORT", "8088")
 	dbPath := getenv("UXER_DB_PATH", "data/uxer.db")
 	distDir := getenv("UXER_STATIC_DIR", "client/dist")
 
