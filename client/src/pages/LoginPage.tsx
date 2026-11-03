@@ -1,10 +1,25 @@
 import { useState } from 'react';
 import { Navigate } from 'react-router-dom';
-import { Box, Button, Card, CardContent, Typography, TextField, Stack, Alert } from '@mui/material';
+import {
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Typography,
+  TextField,
+  Stack,
+  Alert,
+  IconButton,
+  Tooltip,
+} from '@mui/material';
+import DarkModeIcon from '@mui/icons-material/DarkMode';
+import LightModeIcon from '@mui/icons-material/LightMode';
 import { useAuth } from '../auth/AuthContext';
+import { useThemeMode } from '../theme/ThemeModeContext';
 
 export default function LoginPage() {
   const { user, loading, login, signup } = useAuth();
+  const { mode: themeMode, toggle } = useThemeMode();
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -41,8 +56,18 @@ export default function LoginPage() {
       justifyContent="center"
       alignItems="center"
       minHeight="100vh"
-      bgcolor="grey.100"
+      bgcolor="background.default"
+      sx={{ position: 'relative' }}
     >
+      <Tooltip title={themeMode === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}>
+        <IconButton
+          onClick={toggle}
+          aria-label="Toggle color theme"
+          sx={{ position: 'absolute', top: 16, right: 16 }}
+        >
+          {themeMode === 'dark' ? <LightModeIcon /> : <DarkModeIcon />}
+        </IconButton>
+      </Tooltip>
       <Card sx={{ width: 400 }} elevation={2}>
         <CardContent sx={{ p: 4 }}>
           <Typography variant="h4" fontWeight={700} color="primary.main" gutterBottom>

@@ -12,10 +12,14 @@ import {
   ListItemIcon,
 } from '@mui/material';
 import LogoutIcon from '@mui/icons-material/Logout';
+import DarkModeIcon from '@mui/icons-material/DarkMode';
+import LightModeIcon from '@mui/icons-material/LightMode';
 import { useAuth } from '../auth/AuthContext';
+import { useThemeMode } from '../theme/ThemeModeContext';
 
 export default function Layout({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
+  const { mode, toggle } = useThemeMode();
   const navigate = useNavigate();
   const [anchor, setAnchor] = useState<null | HTMLElement>(null);
 
@@ -31,6 +35,11 @@ export default function Layout({ children }: { children: ReactNode }) {
           >
             UXer
           </Typography>
+          <Tooltip title={mode === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}>
+            <IconButton onClick={toggle} aria-label="Toggle color theme">
+              {mode === 'dark' ? <LightModeIcon /> : <DarkModeIcon />}
+            </IconButton>
+          </Tooltip>
           {user && (
             <>
               <Tooltip title={user.name || user.email}>

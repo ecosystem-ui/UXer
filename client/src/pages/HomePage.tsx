@@ -15,8 +15,14 @@ import {
   DialogActions,
   TextField,
   CircularProgress,
+  IconButton,
+  Menu,
+  MenuItem,
+  ListItemIcon,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import Layout from '../components/Layout';
 import { api } from '../api/client';
 import type { Project } from '../api/types';
@@ -26,6 +32,10 @@ export default function HomePage() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
+  const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
+  const [menuFor, setMenuFor] = useState<Project | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<Project | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const navigate = useNavigate();
 
   const load = () =>
@@ -48,6 +58,18 @@ export default function HomePage() {
       navigate(`/projects/${p.id}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const deleteProject = async () => {
+    if (!confirmDelete) return;
+    setDeleting(true);
+    try {
+      await api.deleteProject(confirmDelete.id);
+      setConfirmDelete(null);
+      load();
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -75,9 +97,9 @@ export default function HomePage() {
           <Grid container spacing={2}>
             {projects.map((p) => (
               <Grid item xs={12} sm={6} md={4} key={p.id}>
-                <Card variant="outlined">
+                <Card variant="outlined" sx={{ position: 'relative' }}>
                   <CardActionArea onClick={() => navigate(`/projects/${p.id}`)}>
-                    <CardContent>
+                    <CardContent sx={{ pr: 6 }}>
                       <Typography variant="h6" noWrap>
                         {p.name}
                       </Typography>
@@ -86,11 +108,70 @@ export default function HomePage() {
                       </Typography>
                     </CardContent>
                   </CardActionArea>
+                  <IconButton
+                    size="small"
+                    aria-label={`Project actions for ${p.name}`}
+                    sx={{ position: 'absolute', top: 8, right: 8 }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMenuFor(p);
+                      setMenuAnchor(e.currentTarget);
+                    }}
+                  >
+                    <MoreVertIcon />
+                  </IconButton>
                 </Card>
               </Grid>
             ))}
           </Grid>
         )}
+
+        <Menu
+          anchorEl={menuAnchor}
+          open={Boolean(menuAnchor)}
+          onClose={() => setMenuAnchor(null)}
+        >
+          <MenuItem
+            onClick={() => {
+              setMenuAnchor(null);
+              if (menuFor) setConfirmDelete(menuFor);
+            }}
+          >
+            <ListItemIcon>
+              <DeleteOutlineIcon fontSize="small" />
+            </ListItemIcon>
+            Delete project
+          </MenuItem>
+        </Menu>
+
+        <Dialog
+          open={Boolean(confirmDelete)}
+          onClose={() => setConfirmDelete(null)}
+          fullWidth
+          maxWidth="xs"
+        >
+          <DialogTitle>Delete project?</DialogTitle>
+          <DialogContent>
+            <Typography>
+              This will permanently delete "{confirmDelete?.name}" and all of its versions,
+              comments, and replies.
+            </Typography>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setConfirmDelete(null)} disabled={deleting}>
+              Cancel
+            </Button>
+            <Button
+              color="error"
+              variant="contained"
+              startIcon={<DeleteOutlineIcon />}
+              onClick={deleteProject}
+              disabled={deleting}
+            >
+              Delete
+            </Button>
+          </DialogActions>
+        </Dialog>
 
         <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="xs">
           <DialogTitle>New project</DialogTitle>

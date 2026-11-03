@@ -25,7 +25,7 @@ import { api } from '../api/client';
 import type { Version, Comment, CommentStatus, Reply } from '../api/types';
 import type { Anchor, Pin } from '../bridge-protocol';
 import { sendToBridge } from '../bridge-protocol';
-import { tokens } from '../theme';
+import { useThemeMode } from '../theme/ThemeModeContext';
 
 type Filter = 'open' | 'resolved' | 'all';
 type Sort = 'newest' | 'oldest';
@@ -76,6 +76,7 @@ export default function PreviewPage() {
   const { projectId, versionId } = useParams<{ projectId: string; versionId: string }>();
   const navigate = useNavigate();
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const { tokens } = useThemeMode();
 
   const [version, setVersion] = useState<Version | null>(null);
   const [comments, setComments] = useState<Comment[] | null>(null);
@@ -551,6 +552,7 @@ function FilterSeg({
   onChange: (f: Filter) => void;
   counts: Record<Filter, number>;
 }) {
+  const { tokens } = useThemeMode();
   const items: Filter[] = ['open', 'resolved', 'all'];
   return (
     <Box
@@ -600,6 +602,7 @@ function NewCommentComposer({
   onCancel: () => void;
   onSubmit: (body: string) => void;
 }) {
+  const { tokens } = useThemeMode();
   const [text, setText] = useState('');
   return (
     <Box
@@ -683,6 +686,7 @@ function CommentCard({
   onOpen: () => void;
   onToggle: () => void;
 }) {
+  const { tokens } = useThemeMode();
   const resolved = comment.status === 'resolved';
   const name = displayName(comment);
   const replies = comment.replies ?? [];
@@ -855,6 +859,7 @@ function ThreadDetail({
   onToggle: () => void;
   onDelete: () => void;
 }) {
+  const { tokens } = useThemeMode();
   const resolved = comment.status === 'resolved';
   const name = displayName(comment);
   const replies = comment.replies ?? [];
@@ -1094,6 +1099,7 @@ function ThreadDetail({
 }
 
 function ReplyRow({ reply }: { reply: Reply }) {
+  const { tokens } = useThemeMode();
   const name = displayName(reply);
   return (
     <Box className="reply-row" sx={{ position: 'relative', display: 'flex', gap: 1.25 }}>
