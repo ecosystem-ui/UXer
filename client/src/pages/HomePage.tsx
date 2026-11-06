@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Container,
-  Grid,
   Card,
   CardContent,
   CardActionArea,
@@ -22,10 +21,13 @@ import {
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import Layout from '../components/Layout';
 import { api } from '../api/client';
 import type { Project } from '../api/types';
+import { useThemeMode } from '../theme/ThemeModeContext';
 
 export default function HomePage() {
   const [projects, setProjects] = useState<Project[] | null>(null);
@@ -36,6 +38,7 @@ export default function HomePage() {
   const [menuFor, setMenuFor] = useState<Project | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Project | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const { mode } = useThemeMode();
   const navigate = useNavigate();
 
   const load = () =>
@@ -75,8 +78,8 @@ export default function HomePage() {
 
   return (
     <Layout>
-      <Container maxWidth="lg" sx={{ py: 4 }}>
-        <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+      <Container maxWidth="xl" sx={{ py: { xs: 3, md: 4 }, maxWidth: 1280 }}>
+        <Box display="flex" justifyContent="space-between" alignItems="center" mb={{ xs: 2.5, md: 3 }}>
           <Typography variant="h5" fontWeight={600}>
             Projects
           </Typography>
@@ -94,24 +97,23 @@ export default function HomePage() {
             No projects yet. Create your first project to start reviewing designs.
           </Typography>
         ) : (
-          <Grid container spacing={2}>
+          <Box className="projects-grid">
             {projects.map((p) => (
-              <Grid item xs={12} sm={6} md={4} key={p.id}>
-                <Card variant="outlined" sx={{ position: 'relative' }}>
-                  <CardActionArea onClick={() => navigate(`/projects/${p.id}`)}>
-                    <CardContent sx={{ pr: 6 }}>
-                      <Typography variant="h6" noWrap>
+              <Box key={p.id} sx={{ minWidth: 0 }}>
+                <Card className={`project-card project-card--${mode}`} variant="outlined" sx={{ position: 'relative' }}>
+                  <CardActionArea onClick={() => navigate(`/projects/${p.id}`)} sx={{ minHeight: { xs: 180, md: 192 }, display: 'flex', alignItems: 'stretch' }}>
+                    <CardContent sx={{ width: '100%', p: { xs: 2, md: 2.5 }, pb: { xs: 2, md: 2.5 }, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                      <Box className="project-card__folder" aria-hidden="true">
+                        <FolderOutlinedIcon />
+                      </Box>
+                      <Typography variant="h5" noWrap sx={{ mt: 'auto', maxWidth: 'calc(100% - 24px)', fontWeight: 700, letterSpacing: -0.3 }}>
                         {p.name}
                       </Typography>
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ display: 'block' }}
-                      >
-                        Updated {new Date(p.updated_at).toLocaleString()}
+                      <Typography variant="body1" sx={{ display: 'block', mt: 0.7, color: '#aeb8c2', fontSize: { xs: 13, md: 14 }, lineHeight: 1.35 }}>
+                        Updated {new Date(p.updated_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}{' · '}{new Date(p.updated_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
                       </Typography>
                       {p.role === 'viewer' && (
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
                           Shared by {p.owner_name || 'someone'}
                         </Typography>
                       )}
@@ -121,7 +123,7 @@ export default function HomePage() {
                     <IconButton
                       size="small"
                       aria-label={`Project actions for ${p.name}`}
-                      sx={{ position: 'absolute', top: 8, right: 8 }}
+                      sx={{ position: 'absolute', top: { xs: 18, md: 28 }, right: { xs: 14, md: 28 }, color: '#f5f7fa' }}
                       onClick={(e) => {
                         e.stopPropagation();
                         setMenuFor(p);
@@ -131,10 +133,13 @@ export default function HomePage() {
                       <MoreVertIcon />
                     </IconButton>
                   )}
+                  {p.role === 'viewer' && (
+                    <ArrowForwardIcon aria-hidden="true" sx={{ position: 'absolute', right: { xs: 18, md: 30 }, top: '50%', transform: 'translateY(-50%)', color: '#d5dbe1', fontSize: 30 }} />
+                  )}
                 </Card>
-              </Grid>
+              </Box>
             ))}
-          </Grid>
+          </Box>
         )}
 
         <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)}>

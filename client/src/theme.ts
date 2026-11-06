@@ -20,16 +20,16 @@ export interface Tokens {
 }
 
 export const lightTokens: Tokens = {
-  foreground: '#020618',
-  canvas: '#eef0f3',
-  muted: '#f1f5f9',
-  mutedForeground: '#62748e',
-  border: '#e2e8f0',
-  open: '#1570d1',
-  openSoft: '#e1f0ff',
-  resolved: '#14874e',
-  resolvedSoft: '#daf7e3',
-  ink: '#0f172b',
+  foreground: '#101817',
+  canvas: '#f5f7f6',
+  muted: '#edf3f1',
+  mutedForeground: '#737b79',
+  border: '#d8dddb',
+  open: '#c35b0b',
+  openSoft: '#fff0e5',
+  resolved: '#2f8c4d',
+  resolvedSoft: '#e1f3e6',
+  ink: '#0d7f78',
 };
 
 export const darkTokens: Tokens = {
@@ -54,13 +54,14 @@ export function createAppTheme(mode: ColorMode): Theme {
     palette: {
       mode,
       primary: dark
-        ? { main: '#e2e8f0', contrastText: '#0f172a' }
-        : { main: t.ink, contrastText: '#f8fafc' },
+        ? { main: '#79d6c6', contrastText: '#0b1220' }
+        : { main: t.ink, contrastText: '#ffffff' },
       secondary: { main: t.mutedForeground },
+      success: { main: dark ? '#34d399' : t.resolved },
       error: { main: dark ? '#ef4444' : '#e7000b' },
       background: dark
         ? { default: t.canvas, paper: '#111827' }
-        : { default: '#ffffff', paper: '#ffffff' },
+        : { default: t.canvas, paper: '#ffffff' },
       divider: t.border,
       text: { primary: t.foreground, secondary: t.mutedForeground },
     },

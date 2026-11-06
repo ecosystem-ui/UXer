@@ -31,7 +31,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         color="default"
         sx={{ borderBottom: '1px solid', borderColor: 'divider' }}
       >
-        <Toolbar>
+        <Toolbar sx={{ minHeight: { xs: 60, md: 82 }, px: { xs: 2, md: 3 } }}>
           <Typography
             variant="h6"
             fontWeight={700}

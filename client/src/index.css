@@ -3,3 +3,145 @@ body,
 #root {
   height: 100%;
 }
+
+.projects-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+
+@media (min-width: 600px) {
+  .projects-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 900px) {
+  .projects-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 20px;
+  }
+}
+
+@media (min-width: 1200px) {
+  .projects-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1536px) {
+  .projects-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 22px;
+  }
+}
+
+.project-card {
+  --card-surface: #141b22;
+  --card-border: #29333d;
+  isolation: isolate;
+  overflow: hidden;
+  min-height: 192px;
+  border: 1px solid var(--card-border) !important;
+  border-radius: 11px !important;
+  background: var(--card-surface) !important;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.12);
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.project-card::before {
+  content: '';
+  position: absolute;
+  z-index: 2;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: linear-gradient(180deg, #f0c85b, #6ed6bd, #ef847d, #f0c85b);
+  background-size: 100% 300%;
+  animation: project-card-border-roll 5s linear infinite;
+}
+
+.project-card:hover {
+  transform: translateY(-2px);
+  border-color: #3a4651 !important;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.22);
+}
+
+.project-card .MuiCardActionArea-root {
+  color: inherit;
+}
+
+.project-card .MuiTypography-root,
+.project-card .MuiIconButton-root {
+  color: #f5f7fa;
+}
+
+.project-card .MuiTypography-colorTextSecondary {
+  color: #d5dbe1;
+}
+
+.project-card .MuiCardActionArea-root:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.project-card--dark .MuiTypography-root,
+.project-card--dark .MuiIconButton-root {
+  color: #f5f7fa;
+}
+
+.project-card--dark .MuiTypography-colorTextSecondary {
+  color: #d5dbe1;
+}
+
+.project-card--light {
+  --card-surface: #ffffff;
+  --card-border: #dfe4e2;
+  box-shadow: 0 8px 24px rgba(25, 42, 37, 0.06);
+}
+
+.project-card--light .MuiTypography-root {
+  color: #252a29;
+}
+
+.project-card--light .MuiIconButton-root {
+  color: #737a78 !important;
+}
+
+.project-card--light > .MuiSvgIcon-root {
+  color: #737a78 !important;
+}
+
+.project-card--light .MuiCardActionArea-root:hover {
+  background: rgba(17, 111, 102, 0.025);
+}
+
+.project-card--light .project-card__folder {
+  color: #087f76;
+  background: #e4efed;
+}
+
+.project-card__folder {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  border-radius: 10px;
+  color: #79d6c6;
+  background: #20343b;
+}
+
+.project-card__folder .MuiSvgIcon-root {
+  font-size: 29px;
+}
+
+@keyframes project-card-border-roll {
+  from { background-position: 0 0; }
+  to { background-position: 0 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-card::before,
+  .project-card {
+    animation: none;
+    transition: none;
+  }
+}

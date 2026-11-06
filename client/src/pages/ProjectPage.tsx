@@ -9,14 +9,12 @@ import {
   ListItem,
   ListItemButton,
   ListItemText,
-  ListItemSecondaryAction,
   IconButton,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogActions,
   TextField,
-  Chip,
   CircularProgress,
   Breadcrumbs,
   Link,
@@ -27,13 +25,20 @@ import AddIcon from '@mui/icons-material/Add';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import SearchIcon from '@mui/icons-material/Search';
+import LanguageIcon from '@mui/icons-material/Language';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import Layout from '../components/Layout';
 import { api } from '../api/client';
 import type { Project, ProjectMember, Version } from '../api/types';
+import { useThemeMode } from '../theme/ThemeModeContext';
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const { mode } = useThemeMode();
 
   const [project, setProject] = useState<Project | null>(null);
   const [versions, setVersions] = useState<Version[] | null>(null);
@@ -48,8 +53,10 @@ export default function ProjectPage() {
   const [memberEmail, setMemberEmail] = useState('');
   const [adding, setAdding] = useState(false);
   const [memberError, setMemberError] = useState('');
+  const [search, setSearch] = useState('');
 
   const isOwner = project?.role === 'owner';
+  const openTotal = versions?.reduce((total, version) => total + version.open_count, 0) ?? 0;
 
   const load = () => {
     if (!projectId) return;
@@ -126,10 +133,18 @@ export default function ProjectPage() {
     loadMembers();
   };
 
+  const filteredVersions = versions?.filter((version) => {
+    const needle = search.trim().toLowerCase();
+    return !needle || `${version.label} ${version.url}`.toLowerCase().includes(needle);
+  });
+
   return (
     <Layout>
-      <Container maxWidth="lg" sx={{ py: 4 }}>
-        <Breadcrumbs sx={{ mb: 2 }}>
+      <Container maxWidth="lg" sx={{ py: { xs: 2, md: 3.5 }, px: { xs: 2, sm: 3 } }}>
+        <Breadcrumbs
+          separator="/"
+          sx={{ mb: 1.25, fontSize: 13, '& .MuiBreadcrumbs-separator': { color: 'text.secondary', mx: 0.9 } }}
+        >
           <Link
             underline="hover"
             color="inherit"
@@ -141,26 +156,58 @@ export default function ProjectPage() {
           <Typography color="text.primary">{project?.name ?? '…'}</Typography>
         </Breadcrumbs>
 
-        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-          <Box display="flex" alignItems="center" gap={1.5}>
-            <Typography variant="h5" fontWeight={600}>
+        <Box
+          display="flex"
+          justifyContent="space-between"
+          alignItems={{ xs: 'flex-start', md: 'flex-end' }}
+          gap={2}
+          mb={2.5}
+          flexDirection={{ xs: 'column', md: 'row' }}
+        >
+          <Box>
+            <Typography variant="h5" sx={{ fontWeight: 700, letterSpacing: '-0.03em', mb: 0.2 }}>
               {project?.name}
             </Typography>
-            {!isOwner && project?.owner_name && (
-              <Chip size="small" label={`Shared by ${project.owner_name}`} variant="outlined" />
-            )}
+            <Typography variant="body2" color="text.primary" sx={{ fontWeight: 400 }}>
+              {versions?.length ?? 0} websites · {openTotal} open issues
+            </Typography>
           </Box>
           {isOwner && (
             <Box display="flex" gap={1}>
-              <Button variant="outlined" startIcon={<PersonAddIcon />} onClick={openShare}>
+              <Button
+                variant="outlined"
+                startIcon={<PersonAddIcon />}
+                onClick={openShare}
+                sx={{ minHeight: 38, px: 1.4, borderWidth: 2, fontSize: 14 }}
+              >
                 Share
               </Button>
-              <Button variant="contained" startIcon={<AddIcon />} onClick={() => setOpen(true)}>
+              <Button
+                variant="contained"
+                startIcon={<AddIcon />}
+                onClick={() => setOpen(true)}
+                sx={{ minHeight: 38, px: 1.6, fontWeight: 700, fontSize: 14 }}
+              >
                 New persona
               </Button>
             </Box>
           )}
         </Box>
+
+        <TextField
+          fullWidth
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search websites..."
+          aria-label="Search websites"
+          InputProps={{
+            startAdornment: <SearchIcon sx={{ mr: 1, color: 'text.primary', fontSize: 22 }} />,
+          }}
+          sx={{
+            mb: 2,
+            '& .MuiOutlinedInput-root': { minHeight: 38, borderRadius: 1.5, fontSize: 14 },
+          }}
+        />
 
         {versions === null ? (
           <Box display="flex" justifyContent="center" py={8}>
@@ -171,63 +218,72 @@ export default function ProjectPage() {
             No personas yet. Add a persona with a label and the design URL.
           </Typography>
         ) : (
-          <List
-            sx={{
-              bgcolor: 'background.paper',
-              border: '1px solid',
-              borderColor: 'divider',
-              borderRadius: 2,
-            }}
-          >
-            {versions.map((v) => (
-              <ListItem key={v.id} disablePadding divider>
-                <ListItemButton onClick={() => navigate(`/projects/${projectId}/versions/${v.id}`)}>
+          <List sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            {filteredVersions?.map((v) => (
+              <ListItem
+                key={v.id}
+                disablePadding
+                sx={{
+                  overflow: 'hidden',
+                  border: '1px solid',
+                  borderColor: 'divider',
+                  borderRadius: 1.5,
+                  bgcolor: 'background.paper',
+                  transition: 'border-color 150ms ease, box-shadow 150ms ease',
+                  '&:hover': { borderColor: 'primary.main', boxShadow: '0 7px 22px rgba(0,0,0,.12)' },
+                }}
+              >
+                  <ListItemButton
+                  onClick={() => navigate(`/projects/${projectId}/versions/${v.id}`)}
+                  sx={{ minHeight: { xs: 84, md: 94 }, px: { xs: 1.25, md: 1.75 }, py: 1, gap: 1.25 }}
+                >
+                  <Box
+                    sx={{
+                      flex: '0 0 auto',
+                      width: 48,
+                      height: 48,
+                      display: 'grid',
+                      placeItems: 'center',
+                      borderRadius: 1.5,
+                      bgcolor: mode === 'light' ? '#e3efed' : 'action.hover',
+                      color: 'primary.main',
+                    }}
+                  >
+                    <LanguageIcon sx={{ fontSize: 26 }} />
+                  </Box>
                   <ListItemText
                     primary={
-                      <Box display="flex" alignItems="center" gap={1}>
-                        <Typography variant="subtitle1">{v.label}</Typography>
-                        <Chip size="small" label={`p${v.seq}`} variant="outlined" />
+                      <Box display="flex" alignItems="center" gap={0.75} flexWrap="wrap">
+                        <Typography variant="body1" sx={{ fontWeight: 700 }}>{v.label}</Typography>
+                        <Typography
+                          component="span"
+                          sx={{ px: 0.65, py: 0.05, border: '1px solid', borderColor: 'primary.main', borderRadius: 3, color: 'primary.main', fontWeight: 700, fontSize: 10 }}
+                        >
+                          P{v.seq}
+                        </Typography>
                       </Box>
                     }
                     secondary={
-                      <Typography
-                        variant="body2"
-                        color="text.secondary"
-                        noWrap
-                        sx={{ maxWidth: 520 }}
-                      >
+                      <Typography variant="caption" color="text.secondary" noWrap sx={{ mt: 0.15, maxWidth: { xs: 180, md: 600 } }}>
                         {v.url}
                       </Typography>
                     }
                   />
-                  <Box display="flex" gap={1} alignItems="center" sx={{ mr: 1 }}>
-                    <Chip
-                      size="small"
-                      color="primary"
-                      variant="outlined"
-                      label={`${v.open_count} open`}
-                    />
-                    <Chip
-                      size="small"
-                      color="success"
-                      variant="outlined"
-                      label={`${v.resolved_count} resolved`}
-                    />
+                  <Box display="flex" gap={1} alignItems="center" sx={{ ml: 'auto', mr: { xs: 0, md: 1 }, flexShrink: 0 }}>
+                    <Box sx={{ display: { xs: 'none', sm: 'flex' }, alignItems: 'center', gap: 0.35, px: 0.75, py: 0.3, borderRadius: 3, bgcolor: v.open_count ? (mode === 'light' ? '#c35b0b' : '#f6b74a') : 'transparent', border: v.open_count ? 'none' : '1px solid', borderColor: 'divider', color: v.open_count ? (mode === 'light' ? '#ffffff' : '#0b1220') : 'text.primary', fontWeight: 700, fontSize: 12 }}>
+                      <ErrorOutlineIcon fontSize="small" /> {v.open_count} open
+                    </Box>
+                    <Box sx={{ display: { xs: 'none', sm: 'flex' }, alignItems: 'center', gap: 0.35, px: 0.75, py: 0.3, borderRadius: 3, border: '1px solid', borderColor: 'success.main', color: 'success.main', fontWeight: 700, fontSize: 12 }}>
+                      <CheckCircleOutlineIcon fontSize="small" /> {v.resolved_count} resolved
+                    </Box>
                   </Box>
-                </ListItemButton>
-                {isOwner && (
-                  <ListItemSecondaryAction>
-                    <IconButton
-                      edge="end"
-                      onClick={(e) => {
-                        setMenuFor(v);
-                        setMenuAnchor(e.currentTarget);
-                      }}
-                    >
+                  <OpenInNewIcon sx={{ display: { xs: 'none', md: 'block' }, fontSize: 21 }} />
+                  {isOwner && (
+                    <IconButton edge="end" aria-label={`Actions for ${v.label}`} onClick={(e) => { e.stopPropagation(); setMenuFor(v); setMenuAnchor(e.currentTarget); }}>
                       <MoreVertIcon />
                     </IconButton>
-                  </ListItemSecondaryAction>
-                )}
+                  )}
+                </ListItemButton>
               </ListItem>
             ))}
           </List>
