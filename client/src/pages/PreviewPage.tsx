@@ -89,7 +89,18 @@ export default function PreviewPage() {
   // Listen for bridge messages (element anchor captures, navigation, ready).
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
-      if (e.origin !== window.location.origin) return;
+      // The bridge runs on the persona origin (a subdomain of our own host),
+      // so accept our origin and any of its subdomains.
+      let sameHost = false;
+      try {
+        const originHost = new URL(e.origin).hostname;
+        sameHost =
+          originHost === window.location.hostname ||
+          originHost.endsWith('.' + window.location.hostname);
+      } catch {
+        sameHost = false;
+      }
+      if (!sameHost) return;
       const d = e.data;
       if (!d || d.source !== 'uxer-bridge') return;
       if (d.type === 'anchor') {
@@ -118,6 +129,16 @@ export default function PreviewPage() {
             },
           }));
         }
+      } else if (d.type === 'step-reached') {
+        const id = typeof d.id === 'string' ? d.id : null;
+        if (id) {
+          setBlocked((b) => {
+            if (!(id in b)) return b;
+            const rest = { ...b };
+            delete rest[id];
+            return rest;
+          });
+        }
       }
     };
     window.addEventListener('message', onMsg);
@@ -145,6 +166,7 @@ export default function PreviewPage() {
       index: i + 1,
       url: normalizeDesignUrl(c.page_url) || '',
       step: c.step || '',
+      state: c.state || '',
     }));
   }, [comments]);
 
@@ -233,6 +255,8 @@ export default function PreviewPage() {
         text_excerpt: pendingAnchor.text,
         page_url: normalizeDesignUrl(pendingAnchor.url || '') || version?.url || '',
         step: pendingAnchor.step || '',
+        state: pendingAnchor.state || '',
+        state_mode: pendingAnchor.stateMode || '',
         x: pendingAnchor.x,
         y: pendingAnchor.y,
         body: body.trim(),

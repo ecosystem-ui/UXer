@@ -7,7 +7,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	_ "embed"
-	"encoding/base64"
+	"encoding/base32"
 	"errors"
 	"io"
 	"net"
@@ -93,10 +93,10 @@ func (h *Handler) HandleBridge(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(bridgeJS)
 }
 
-// HandleProxy is the entry point. The design URL is passed via ?url=. We
-// redirect to a path-preserving URL so that the document's pathname carries
-// the app's deployment base path — this lets the SPA router's basename match
-// after the JS rewrite.
+// HandleProxy is the entry point. The design URL is passed via ?url=. We mint
+// a signed origin token and redirect to the persona's own origin
+// (scheme://<token>.<host>/<path>), so the proxied page has a unique origin
+// and the design's own routing works unchanged.
 func (h *Handler) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	target := r.URL.Query().Get("url")
 	if target == "" {
@@ -110,20 +110,15 @@ func (h *Handler) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	origin := u.Scheme + "://" + u.Host
-	basePath := basePathOf(u)
-	b64 := h.encodeRoute(origin, basePath)
+	token := h.encodeOriginToken(origin)
 
-	// Preserve the exact path so the SPA router matches the same route the
-	// user was on. Only the app's base path itself gets a trailing slash,
-	// so a bare directory URL (e.g. /osac-ux) matches the router basename.
+	// Preserve the design path verbatim so its router matches the same route.
 	p := u.Path
 	if p == "" || p == "/" {
 		p = "/"
-	} else if basePath != "/" && p == strings.TrimSuffix(basePath, "/") {
-		p += "/"
 	}
 
-	dest := "/__uxer__/p/" + b64 + p
+	dest := requestScheme(r) + "://" + token + "." + r.Host + p
 	if u.RawQuery != "" {
 		dest += "?" + u.RawQuery
 	}
@@ -133,20 +128,17 @@ func (h *Handler) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, dest, http.StatusFound)
 }
 
-// HandlePath serves a path-preserving subresource or nested page
-// (/__uxer__/p/{b64}/{rest...}). The base64 blob encodes both the origin and
-// the app's deployment base path (separated by a newline).
-func (h *Handler) HandlePath(w http.ResponseWriter, r *http.Request) {
-	b64 := r.PathValue("b64")
-	rest := r.PathValue("rest")
-
-	origin, basePath, err := h.decodeRoute(b64)
-	if err != nil {
-		http.Error(w, "invalid proxy path", http.StatusBadRequest)
+// HandleOrigin serves a request addressed to a persona origin. The proxied
+// origin is recovered from the signed subdomain token; the token itself is
+// the credential (its HMAC signature prevents forging arbitrary origins), so
+// subresource requests work without the session cookie.
+func (h *Handler) HandleOrigin(w http.ResponseWriter, r *http.Request, origin string) {
+	if r.URL.Path == "/__uxer__/bridge.js" {
+		h.HandleBridge(w, r)
 		return
 	}
 
-	target := origin + "/" + rest
+	target := origin + r.URL.Path
 	if q := r.URL.RawQuery; q != "" {
 		target += "?" + q
 	}
@@ -157,13 +149,20 @@ func (h *Handler) HandlePath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prefix := "/__uxer__/p/" + b64
-	proxiedBase := prefix + basePath
-	h.serveURL(w, r, u, origin, basePath, prefix, proxiedBase)
+	h.serveURL(w, r, u, origin, requestScheme(r)+"://"+r.Host)
+}
+
+// requestScheme reports the external scheme for the request, honoring a
+// reverse-proxy's X-Forwarded-Proto header.
+func requestScheme(r *http.Request) string {
+	if s := r.Header.Get("X-Forwarded-Proto"); s == "http" || s == "https" {
+		return s
+	}
+	return "http"
 }
 
 // serveURL fetches the target and rewrites it in place.
-func (h *Handler) serveURL(w http.ResponseWriter, r *http.Request, u *url.URL, origin, basePath, prefix, proxiedBase string) {
+func (h *Handler) serveURL(w http.ResponseWriter, r *http.Request, u *url.URL, origin, personaOrigin string) {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, u.String(), nil)
 	if err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -222,7 +221,7 @@ func (h *Handler) serveURL(w http.ResponseWriter, r *http.Request, u *url.URL, o
 			http.Error(w, "upstream response too large", http.StatusBadGateway)
 			return
 		}
-		out, rerr := rewriteHTML(bytes.NewReader(raw), origin, prefix, proxiedBase, u)
+		out, rerr := rewriteHTML(bytes.NewReader(raw), origin, personaOrigin, u)
 		if rerr != nil {
 			http.Error(w, "rewrite failed", http.StatusBadGateway)
 			return
@@ -236,7 +235,7 @@ func (h *Handler) serveURL(w http.ResponseWriter, r *http.Request, u *url.URL, o
 			http.Error(w, "upstream response too large", http.StatusBadGateway)
 			return
 		}
-		out := rewriteJS(raw, basePath, proxiedBase)
+		out := rewriteJS(raw, origin, personaOrigin)
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(out)
@@ -246,7 +245,7 @@ func (h *Handler) serveURL(w http.ResponseWriter, r *http.Request, u *url.URL, o
 			http.Error(w, "upstream response too large", http.StatusBadGateway)
 			return
 		}
-		out := []byte(rewriteCSS(string(raw), origin, prefix))
+		out := []byte(rewriteCSS(string(raw), origin, personaOrigin))
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(out)
@@ -270,43 +269,61 @@ func readLimited(r io.Reader, limit int64) ([]byte, bool) {
 	return data, false
 }
 
-// encodeRoute packs origin and base path into a signed, URL-safe token. The
-// HMAC signature prevents clients from forging arbitrary proxy origins.
-func (h *Handler) encodeRoute(origin, basePath string) string {
-	payload := []byte(origin + "\n" + basePath)
+// encodeOriginToken packs an origin into two DNS-safe subdomain labels
+// (<payload>.<signature>) using base32 (alphabet A-Z2-7, no padding), which is
+// valid in hostnames. The HMAC signature prevents clients from forging
+// arbitrary proxy origins.
+func (h *Handler) encodeOriginToken(origin string) string {
+	enc := base32.StdEncoding.WithPadding(base32.NoPadding)
 	mac := hmac.New(sha256.New, h.key)
-	mac.Write(payload)
+	mac.Write([]byte(origin))
 	sig := mac.Sum(nil)
-	return base64.RawURLEncoding.EncodeToString(payload) + "." +
-		base64.RawURLEncoding.EncodeToString(sig)
+	return enc.EncodeToString([]byte(origin)) + "." + enc.EncodeToString(sig)
 }
 
-// decodeRoute unpacks and verifies a route token into origin and base path.
-func (h *Handler) decodeRoute(token string) (origin, basePath string, err error) {
+// decodeOriginToken unpacks and verifies a two-label origin token.
+func (h *Handler) decodeOriginToken(token string) (string, error) {
+	enc := base32.StdEncoding.WithPadding(base32.NoPadding)
+	token = strings.ToUpper(token)
 	parts := strings.SplitN(token, ".", 2)
 	if len(parts) != 2 {
-		return "", "", errors.New("malformed route token")
+		return "", errors.New("malformed origin token")
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	payload, err := enc.DecodeString(parts[0])
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
+	sig, err := enc.DecodeString(parts[1])
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	mac := hmac.New(sha256.New, h.key)
 	mac.Write(payload)
 	if !hmac.Equal(sig, mac.Sum(nil)) {
-		return "", "", errors.New("invalid route token signature")
+		return "", errors.New("invalid origin token signature")
 	}
 
-	segs := strings.SplitN(string(payload), "\n", 2)
-	if len(segs) != 2 || segs[0] == "" || segs[1] == "" {
-		return "", "", errors.New("malformed route token")
+	origin := string(payload)
+	if !strings.HasPrefix(origin, "http://") && !strings.HasPrefix(origin, "https://") {
+		return "", errors.New("malformed origin")
 	}
-	if !strings.HasPrefix(segs[0], "http://") && !strings.HasPrefix(segs[0], "https://") {
-		return "", "", errors.New("malformed route origin")
+	return origin, nil
+}
+
+// OriginFromHost reports whether host is a persona origin (two signed DNS
+// labels followed by the base host) and, if so, the proxied origin.
+func (h *Handler) OriginFromHost(host string) (string, bool) {
+	name := host
+	if i := strings.IndexByte(name, ':'); i >= 0 {
+		name = name[:i]
 	}
-	return segs[0], segs[1], nil
+	labels := strings.Split(name, ".")
+	if len(labels) < 3 {
+		return "", false
+	}
+	origin, err := h.decodeOriginToken(labels[0] + "." + labels[1])
+	if err != nil {
+		return "", false
+	}
+	return origin, true
 }

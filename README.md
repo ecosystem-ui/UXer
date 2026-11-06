@@ -125,22 +125,23 @@ afterwards.
 
 ## Preview proxy & limitations
 
-The `/proxy?url=…` endpoint fetches the design URL server-side, rewrites
-same-origin links/scripts/styles through a **path-preserving** subresource
-route (`/__uxer__/p/<origin>/<path>`), injects a `<base>` so relative JS
-`import()`/CSS `url()`/HTML references resolve correctly, strips
-`X-Frame-Options`/`Content-Security-Policy`, and injects the annotation bridge.
-It guards against SSRF (only global-unicast addresses are reachable).
+The `/proxy?url=…` endpoint validates the design URL server-side, mints a
+signed origin token, and redirects to a **persona-specific origin**
+(`scheme://<token>.<host>/<path>`). Each persona is therefore served under its
+own origin, so the design's own URL resolution — relative and root-relative
+links, `window.location.origin`/`location.assign`, forms, React
+`BrowserRouter`, and htmx requests — all work unchanged. Only same-origin
+absolute URLs are rewritten onto the persona origin. The proxy strips
+`X-Frame-Options`/`Content-Security-Policy`, injects the annotation bridge, and
+guards against SSRF (only global-unicast addresses are reachable).
 
 Known limitations (documented, not blockers):
 
 - **WebSockets** and cross-origin subframes of the target site are not proxied.
-- **SPA path routing**: `fetch`/`XMLHttpRequest`/`history.pushState` are patched
-  so JS apps and their API calls work, but `history.pushState`-style pathname
-  routing (e.g. React Router `BrowserRouter`) may render the proxied URL rather
-  than the original pathname. Hash-based routing is unaffected.
 - **Cookies are not forwarded** to the target (stateless proxy). Design URLs
   must be publicly accessible or listed in `ALLOW_PRIVATE_HOSTS`.
+- Subdomain auth is the signed origin token itself (a capability URL); the
+  minting endpoint still requires an authenticated session.
 - Iframes that the target site blocks via JavaScript (e.g. `top !== self`
   checks) cannot be overridden.
 

@@ -77,11 +77,13 @@ test.describe('comment routing', () => {
       await expect(page.getByText('Gated step comment', { exact: true })).toBeVisible();
 
       // Simulate the bridge reporting that the recorded step is gated by
-      // validation/required fields.
+      // validation/required fields. A synthetic MessageEvent needs an explicit
+      // origin, otherwise the parent's origin check rejects it.
       const reportBlocked = () =>
         page.evaluate((id) => {
           window.dispatchEvent(
             new MessageEvent('message', {
+              origin: window.location.origin,
               data: {
                 source: 'uxer-bridge',
                 type: 'step-blocked',
@@ -106,6 +108,66 @@ test.describe('comment routing', () => {
       await expect(page.getByText(/Thread #/)).toBeVisible();
       await reportBlocked();
       await expect(page.getByText(/The wizard can't reach .* automatically/)).toBeVisible();
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test('opening a comment on the external IP pool review step does not corrupt the wizard', async ({ browser }) => {
+    const ctx = await browser.newContext();
+    try {
+      const page = await ctx.newPage();
+      await signupViaUI(page, { name: 'Wiz', email: 'wiz@example.com', password: 'password123' });
+      await createProject(page, 'Wizard gate');
+      const projectId = projectIdFromUrl(page.url());
+      await createPersona(page, 'Wizard persona', OSAC_URL);
+
+      const versions = await listVersions(page, projectId);
+      const versionId = versions[0].id;
+
+      // Comment 4's scenario on the OSAC persona: pinned to the "review" step
+      // of the create external IP pool wizard, which is gated behind required
+      // fields (name, tenant, CIDRs) that only exist in the wizard's runtime
+      // form state. A fresh wizard cannot reach it automatically.
+      await seedComment(page, versionId, {
+        selector: '.pf-v6-l-stack:uxer-text("ReviewNamedssdfsfsIP familyIPv4DescriptionfdsCIDRs1.1.1.1/23TenantAcme Corp")',
+        text_excerpt: 'Review step comment',
+        page_url: `${OSAC_URL}admin/infrastructure/external-ip-pools/create`,
+        step: 'review',
+        x: 0.42,
+        y: 0.06,
+        body: 'Review step comment',
+      });
+
+      // Open the preview and open the seeded thread. focusComment sees the
+      // comment is on a different page, so it asks the bridge to navigate
+      // there and replay the wizard to the "review" step.
+      await page.getByText('Wizard persona', { exact: true }).click();
+      await page.getByText('Comment mode', { exact: true }).waitFor();
+      await expect(page.getByText('Review step comment', { exact: true })).toBeVisible();
+
+      // Wait for the proxied design to finish loading before opening the
+      // thread, so the bridge is ready to receive the navigate request.
+      const frame = page.frameLocator('iframe');
+      await expect(frame.getByRole('heading', { name: 'Catalog' })).toBeVisible({ timeout: 60_000 });
+
+      await page.getByText('Review step comment', { exact: true }).click();
+      await expect(page.getByText(/Thread #/)).toBeVisible();
+
+      // The bridge reports the required-fields gate instead of clicking
+      // "Next", so the parent surfaces the manual-fallback guidance.
+      await expect(page.getByText(/The wizard can't reach .* automatically/)).toBeVisible({
+        timeout: 15_000,
+      });
+
+      // The wizard must not have been corrupted: clicking "Next" on an empty
+      // required-field step would surface validation errors ("Fix the
+      // highlighted errors before continuing") and leave the form invalid.
+      await expect(frame.getByRole('region', { name: 'Create external IP pool wizard' })).toBeVisible({
+        timeout: 15_000,
+      });
+      await expect(frame.getByText('Fix the highlighted errors before continuing')).toHaveCount(0);
+      await expect(frame.locator('[aria-invalid="true"]')).toHaveCount(0);
     } finally {
       await ctx.close();
     }

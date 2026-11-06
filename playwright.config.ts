@@ -29,7 +29,7 @@ export default defineConfig({
       UXER_PORT: '8099',
       UXER_DB_PATH: 'data/e2e.db',
       UXER_STATIC_DIR: '../client/dist',
-      SESSION_SECRET: 'e2e-test-secret',
+      SESSION_SECRET: 'e2e-test-secret-0123456789abcdef0123456789abcdef',
       ALLOW_PRIVATE_HOSTS: 'localhost,127.0.0.1',
     },
   },

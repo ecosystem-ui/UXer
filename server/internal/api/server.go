@@ -68,12 +68,9 @@ func (s *Server) Routes(static http.Handler) http.Handler {
 	mux.HandleFunc("PATCH /api/comments/{id}", s.requireUser(s.handleUpdateComment))
 	mux.HandleFunc("DELETE /api/comments/{id}", s.requireUser(s.handleDeleteComment))
 
-	// proxy (requires an authenticated session; SSRF guard is the defense
-	// against internal-network access, see proxy package)
+	// proxy minting (requires an authenticated session; the SSRF guard is the
+	// defense against internal-network access, see proxy package)
 	mux.HandleFunc("GET /proxy", s.requireSession(s.Proxy.HandleProxy))
-	mux.HandleFunc("GET /__uxer__/p/{b64}", s.requireSession(s.Proxy.HandlePath))
-	mux.HandleFunc("GET /__uxer__/p/{b64}/{rest...}", s.requireSession(s.Proxy.HandlePath))
-	mux.HandleFunc("GET /__uxer__/bridge.js", s.requireSession(s.Proxy.HandleBridge))
 
 	if static != nil {
 		mux.Handle("/", static)
@@ -83,7 +80,15 @@ func (s *Server) Routes(static http.Handler) http.Handler {
 		})
 	}
 
-	return mux
+	// Requests addressed to a persona origin (<token>.<host>) are proxied to
+	// that persona; everything else is the UXer app itself.
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if origin, ok := s.Proxy.OriginFromHost(r.Host); ok {
+			s.Proxy.HandleOrigin(w, r, origin)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 // requireUser guards a handler behind a valid session, injecting the user.

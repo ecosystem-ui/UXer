@@ -97,12 +97,15 @@ func TestEndToEndFlow(t *testing.T) {
 
 	// Create comment.
 	rec = do(h, cookie, http.MethodPost, "/api/versions/"+version.ID+"/comments",
-		`{"selector":"#hero > button","text_excerpt":"Get started","x":0.5,"y":0.5,"body":"Button color is off"}`)
+		`{"selector":"#hero > button","text_excerpt":"Get started","x":0.5,"y":0.5,"body":"Button color is off","state":"nav=Tenants","state_mode":"declarative"}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create comment: %d %s", rec.Code, rec.Body.String())
 	}
 	var comment db.Comment
 	_ = json.Unmarshal(rec.Body.Bytes(), &comment)
+	if comment.State != "nav=Tenants" || comment.StateMode != "declarative" {
+		t.Fatalf("state not persisted: %+v", comment)
+	}
 
 	// List comments.
 	rec = do(h, cookie, http.MethodGet, "/api/versions/"+version.ID+"/comments", "")
@@ -113,6 +116,9 @@ func TestEndToEndFlow(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &comments)
 	if len(comments) != 1 || comments[0].Status != "open" {
 		t.Fatalf("expected 1 open comment, got %+v", comments)
+	}
+	if comments[0].State != "nav=Tenants" || comments[0].StateMode != "declarative" {
+		t.Fatalf("state not returned on list: %+v", comments[0])
 	}
 
 	// Add a reply.

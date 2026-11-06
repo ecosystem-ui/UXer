@@ -53,6 +53,10 @@ export interface Comment {
   page_url: string;
   /** Wizard step id/label (captured from a stepper) so navigation can replay it. */
   step: string;
+  /** View-state key the comment was captured in; empty means "any state". */
+  state: string;
+  /** How the state key was produced: 'declarative' | 'auto'. */
+  state_mode: string;
   x: number;
   y: number;
   body: string;

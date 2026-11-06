@@ -69,6 +69,8 @@ type Comment struct {
 	TextExcerpt       string  `json:"text_excerpt"`
 	PageURL           string  `json:"page_url"`
 	Step              string  `json:"step"`
+	State             string  `json:"state"`
+	StateMode         string  `json:"state_mode"`
 	X                 float64 `json:"x"`
 	Y                 float64 `json:"y"`
 	Body              string  `json:"body"`

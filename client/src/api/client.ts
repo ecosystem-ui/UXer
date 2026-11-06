@@ -20,6 +20,8 @@ export interface NewCommentInput {
   text_excerpt: string;
   page_url: string;
   step: string;
+  state: string;
+  state_mode: string;
   x: number;
   y: number;
   body: string;

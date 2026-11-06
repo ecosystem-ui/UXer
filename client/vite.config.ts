@@ -1,15 +1,14 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// Dev server proxies API + proxy routes to the Go backend on :8080.
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 5173,
+    port: 5174,
+    strictPort: true,
     proxy: {
       '/api': 'http://localhost:8088',
       '/proxy': 'http://localhost:8088',
-      '/__uxer__': 'http://localhost:8088',
     },
   },
 });

@@ -3,7 +3,11 @@
  *   - browse / comment modes
  *   - hover highlight + click-to-capture (selector, text, relative x/y)
  *   - Shadow DOM pins overlay
- *   - SPA proxying (fetch / XHR / history patches)
+ *   - location tracking (so the parent can map comments back to design pages)
+ *
+ * The page is served under a persona-specific origin, so the design's own URL
+ * resolution (relative/root-relative links, location.assign, forms) works
+ * untouched; no fetch/XHR/history URL rewriting is needed here.
  */
 (function () {
   'use strict';
@@ -15,16 +19,34 @@
   var origin = config.origin || (function () {
     try { return new URL(base).origin; } catch (e) { return window.location.origin; }
   })();
-  var prefix = config.prefix || '/__uxer__/p/';
   var mode = 'browse';
   var pins = [];
   var activeHighlight = null;
   var activeHighlightPage = null;
   var highlightTimer = null;
+  // Comment id of the pin currently being focused (thread open). Its pin is
+  // kept visible — at a fallback position when its element/step isn't reachable
+  // yet — until the page reaches the comment's state.
+  var pendingId = null;
+  // Comment ids we already reported as `step-blocked`; cleared once the pin's
+  // element becomes reachable so the parent can drop the now-stale alert.
+  var blockedIds = {};
   // Wizard-replay progress tracking, used to detect when the wizard is gated
   // by validation/required fields and can't reach the target step.
   var replayStep = '';
   var replayStuck = 0;
+  // Declarative state config sent by the parent (persona-level), if any.
+  // It is overridden by a page-provided window.__UXER_STATE__.
+  var parentStateConfig = null;
+
+  // Built-in declarative controls for PatternFly v5/v6 apps. These are used
+  // when the page carries PF chrome (nav / tabs / wizard) and no explicit
+  // config is provided. The wizard step reuses currentStepKey().
+  var PF_DEFAULT_CONTROLS = [
+    { key: 'step', selector: '.pf-v6-c-wizard__nav-link, .pf-v5-c-wizard__nav-link', value: 'wizard-step' },
+    { key: 'nav', selector: '.pf-v6-c-nav__link.pf-m-current, .pf-v5-c-nav__link.pf-m-current, .pf-v6-c-nav__link[aria-current="page"], .pf-v5-c-nav__link[aria-current="page"]', value: 'text' },
+    { key: 'tab', selector: '.pf-v6-c-tabs__item.pf-m-current .pf-v6-c-tabs__item-text, .pf-v5-c-tabs__item.pf-m-current .pf-v5-c-tabs__item-text', value: 'text' }
+  ];
 
   function post(type, data) {
     try {
@@ -35,31 +57,15 @@
     } catch (e) {}
   }
 
-  // Extract the pathname from any URL form (absolute, root-relative, or
-  // relative), without query or hash.
-  function pathOf(u) {
-    try { return new URL(u, base).pathname; } catch (e) {
-      var p = String(u);
-      var q = p.indexOf('?'); if (q >= 0) p = p.slice(0, q);
-      var h = p.indexOf('#'); if (h >= 0) p = p.slice(0, h);
-      return p;
-    }
-  }
-
-  // Is this URL already in path-preserving proxied form (path or absolute)?
-  function isProxied(u) {
-    return typeof u === 'string' && pathOf(u).indexOf(prefix) === 0;
-  }
-
-  // Map a URL back to the real origin design URL. Handles proxied absolute
-  // URLs (e.g. window.location.href) and proxied paths alike.
+  // Map a URL back to the design's real origin. URLs on the persona origin
+  // (the page's own origin) are mapped to the design origin; everything else
+  // passes through.
   function designUrl(u) {
     if (typeof u !== 'string') return u;
     try {
-      var a = new URL(u, base);
-      var path = a.pathname;
-      if (path.indexOf(prefix) === 0) {
-        return origin + path.slice(prefix.length) + a.search + a.hash;
+      var a = new URL(u, window.location.href);
+      if (a.origin === window.location.origin) {
+        return origin + a.pathname + a.search + a.hash;
       }
       return a.href;
     } catch (e) { return u; }
@@ -81,31 +87,6 @@
   // The design URL of the page currently shown in the iframe.
   function currentPage() {
     return pageKey(designUrl(window.location.href));
-  }
-
-  function isSameOrigin(u) {
-    if (typeof u === 'string' && isProxied(u)) return true;
-    try {
-      return new URL(u, base).origin === origin;
-    } catch (e) { return false; }
-  }
-
-  // Map a URL onto the path-preserving proxy; already-proxied and
-  // cross-origin URLs pass through unchanged.
-  function resUrl(u) {
-    if (typeof u === 'string') {
-      if (isProxied(u)) return u;
-      if (u.charAt(0) === '/') {
-        var a = new URL(u, base);
-        if (a.origin === origin) return prefix + a.pathname + a.search;
-        return u;
-      }
-    }
-    try {
-      var b = new URL(u, base);
-      if (b.origin !== origin) return b.href;
-      return prefix + b.pathname + b.search;
-    } catch (e) { return u; }
   }
 
   /* ---------- selector + capture ---------- */
@@ -295,6 +276,90 @@
     return '';
   }
 
+  // Whether the page carries PatternFly navigation / tabs / wizard chrome.
+  function detectPatternFly() {
+    return !!document.querySelector(
+      '.pf-v6-c-wizard, .pf-v5-c-wizard, .pf-v6-c-tabs, .pf-v5-c-tabs, .pf-v6-c-nav, .pf-v5-c-nav'
+    );
+  }
+
+  // Extract the value a declarative control contributes to the state key.
+  function controlValue(spec) {
+    if (spec.value === 'wizard-step') return currentStepKey();
+    var el = document.querySelector(spec.selector);
+    if (!el) return '';
+    if (spec.value === 'text') return (el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (spec.value === 'value') return el.value != null ? String(el.value) : '';
+    if (spec.value === 'checked') return el.checked ? '1' : '0';
+    if (spec.value === 'id') return el.id || '';
+    if (typeof spec.value === 'string' && spec.value.indexOf('attr:') === 0) {
+      return el.getAttribute(spec.value.slice(5)) || '';
+    }
+    return '';
+  }
+
+  // Deterministic, order-independent key from a set of declarative controls.
+  function declarativeKey(controls) {
+    var parts = [];
+    for (var i = 0; i < controls.length; i++) {
+      var v = controlValue(controls[i]);
+      if (v) parts.push(controls[i].key + '=' + v);
+    }
+    parts.sort();
+    return parts.join('|');
+  }
+
+  // Coarse, stable signature for non-framework pages: visible structural
+  // sections plus active markers, keyed by stable identity. Filter-only —
+  // no attempt is made to restore this state.
+  function autoSignature() {
+    var ids = [];
+    var els = document.querySelectorAll(
+      'section[id], article[id], [role="tabpanel"][id], [data-state-section], ' +
+      '[aria-selected="true"], [aria-current="page"], [aria-current="step"]'
+    );
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      var id = el.id || el.getAttribute('data-state-section') || el.getAttribute('data-state');
+      if (!id) continue;
+      if (el.id) {
+        // Ignore sections that are currently hidden (zero size).
+        var r = el.getBoundingClientRect();
+        if (r.width === 0 && r.height === 0) continue;
+      }
+      ids.push(id);
+    }
+    ids.sort();
+    var uniq = [];
+    for (var j = 0; j < ids.length; j++) {
+      if (uniq.indexOf(ids[j]) === -1) uniq.push(ids[j]);
+    }
+    return uniq.join('|');
+  }
+
+  // The active declarative controls: page-provided > parent-provided >
+  // PatternFly defaults (when PF chrome is detected) > null (auto mode).
+  function activeControls() {
+    if (window.__UXER_STATE__ && Array.isArray(window.__UXER_STATE__.controls)) {
+      return window.__UXER_STATE__.controls;
+    }
+    if (parentStateConfig && Array.isArray(parentStateConfig.controls)) {
+      return parentStateConfig.controls;
+    }
+    if (detectPatternFly()) return PF_DEFAULT_CONTROLS;
+    return null;
+  }
+
+  // Compute the current view-state key and its mode ('declarative' | 'auto').
+  // An empty key means "no distinguishable state" and disables filtering.
+  function viewState() {
+    var controls = activeControls();
+    if (controls) {
+      return { key: declarativeKey(controls), mode: 'declarative' };
+    }
+    return { key: autoSignature(), mode: 'auto' };
+  }
+
   // The wizard's "Next" button, if one is present. It may be disabled (e.g.
   // validation still pending) — callers check `.disabled` before clicking.
   function wizardNextButton() {
@@ -338,11 +403,39 @@
     return (link.textContent || '').replace(/\s+/g, ' ').trim() || step;
   }
 
+  // Whether a required PatternFly form field in the current wizard step is
+  // empty. PatternFly marks required fields with a `*` via
+  // `.pf-v6-c-form__label-required`; the field control lives in the same
+  // `.pf-v6-c-form__group`. An empty required field gates "Next" — clicking it
+  // would only surface validation errors — so it is reported as a block
+  // instead of blindly clicking Next.
+  function requiredFieldEmpty() {
+    var scope = document.querySelector('.pf-v6-c-wizard, .pf-v5-c-wizard') || document;
+    var groups = scope.querySelectorAll('.pf-v6-c-form__group, .pf-v5-c-form__group');
+    for (var i = 0; i < groups.length; i++) {
+      var g = groups[i];
+      if (!g.querySelector('.pf-v6-c-form__label-required, .pf-v5-c-form__label-required')) continue;
+      var control = g.querySelector('input, textarea, select');
+      if (control) {
+        if (control.disabled || control.readOnly) continue;
+        var v = control.value == null ? '' : String(control.value);
+        if (!v.trim()) return true;
+      } else {
+        // PatternFly select / multiselect: an empty value shows no selected
+        // text in its toggle.
+        var text = g.querySelector('.pf-v6-c-menu-toggle__text, .pf-v5-c-menu-toggle__text');
+        if (!text || !(text.textContent || '').trim()) return true;
+      }
+    }
+    return false;
+  }
+
   // Why the wizard currently can't advance ('' if it can). PatternFly shows
   // validation errors via `aria-invalid` / `.pf-m-error`, or disables "Next"
   // (but only counts a disabled Next as a block when there's no catalog card
   // left to select, i.e. we're past the card-selection gate).
   function wizardBlockReason() {
+    if (requiredFieldEmpty()) return 'required-fields';
     var invalid = document.querySelector(
       '[aria-invalid="true"], .pf-m-error, .pf-v6-c-form__group.pf-m-error'
     );
@@ -357,11 +450,14 @@
     var rect = el.getBoundingClientRect();
     var x = rect.width > 0 ? (cx - rect.left) / rect.width : 0.5;
     var y = rect.height > 0 ? (cy - rect.top) / rect.height : 0.5;
+    var st = viewState();
     return {
       selector: uniqueSelector(el),
       text: textExcerpt(el),
       url: designUrl(window.location.href),
       step: currentStepKey(),
+      state: st.key,
+      stateMode: st.mode,
       x: Math.min(1, Math.max(0, x)),
       y: Math.min(1, Math.max(0, y))
     };
@@ -383,7 +479,10 @@
     'border-radius:50%;display:flex;align-items:center;justify-content:center;' +
     'font:600 11px/1 -apple-system,Segoe UI,Roboto,sans-serif;color:#fff;' +
     'background:#2563eb;box-shadow:0 1px 3px rgba(0,0,0,0.4);}' +
-    '.uxer-pin.resolved{background:#16a34a;}';
+    '.uxer-pin.resolved{background:#16a34a;}' +
+    '.uxer-pin.uxer-pin--pending{background:#fff;color:#2563eb;border:2px dashed #2563eb;' +
+    'box-shadow:0 1px 3px rgba(0,0,0,0.4);animation:uxer-pulse 1.4s ease-in-out infinite;}' +
+    '@keyframes uxer-pulse{0%,100%{opacity:1;}50%{opacity:0.55;}}';
   var highlightEl = document.createElement('div');
   highlightEl.className = 'uxer-highlight';
   var pinsLayer = document.createElement('div');
@@ -408,26 +507,95 @@
     highlightEl.style.height = r.height + 'px';
   }
 
+  // Nearest collapsible toggle ancestor (PatternFly accordion or any
+  // aria-expanded control) of an element, up to a few levels up.
+  function collapsibleToggle(el) {
+    var n = el;
+    for (var i = 0; i < 8 && n && n !== document.body; i++) {
+      if (n.hasAttribute && n.hasAttribute('aria-expanded')) return n;
+      if (/\bpf-(v6|v5)-c-accordion__toggle\b/.test(n.className || '')) return n;
+      n = n.parentElement;
+    }
+    return null;
+  }
+
   function renderPins() {
     if (!mountOverlay()) return;
     pinsLayer.innerHTML = '';
     var cur = currentPage();
+    var st = viewState();
     for (var i = 0; i < pins.length; i++) {
       var p = pins[i];
+      var isPending = pendingId != null && p.id === pendingId;
+      // While a thread is open, show only that comment's pin.
+      if (pendingId != null && !isPending) continue;
       // Only render pins that belong to the current page. Pins with no url
       // (legacy) are shown everywhere.
       if (p.url && cur && pageKey(p.url) !== cur) continue;
+      // Only render pins whose recorded view state matches the current one.
+      // The pending (focused) pin is exempt so it stays visible while the
+      // page hasn't reached its state yet.
+      if (p.state && st.key && p.state !== st.key && !isPending) continue;
       var el = findElement(p.selector);
-      if (!el) continue;
+      if (!el) {
+        // Element not rendered (e.g. collapsed accordion): keep a fallback
+        // pin so the comment stays discoverable.
+        appendPinDot(p, pendingDotPosition(), true);
+        continue;
+      }
       var r = el.getBoundingClientRect();
-      if (r.width === 0 && r.height === 0) continue;
-      var dot = document.createElement('div');
-      dot.className = 'uxer-pin' + (p.status === 'resolved' ? ' resolved' : '');
-      dot.textContent = String(p.index);
-      dot.style.left = (r.left + r.width * p.x) + 'px';
-      dot.style.top = (r.top + r.height * p.y) + 'px';
-      pinsLayer.appendChild(dot);
+      if (r.width === 0 && r.height === 0) {
+        appendPinDot(p, pendingDotPosition(), true);
+        // The selected comment's target is inside a collapsed item: outline
+        // the collapsible toggle so the reviewer knows where to expand.
+        if (isPending) {
+          var toggle = collapsibleToggle(el);
+          if (toggle) {
+            var toggleSel = uniqueSelector(toggle);
+            if (toggleSel) {
+              activeHighlight = toggleSel;
+              activeHighlightPage = currentPage();
+              positionHighlight(toggle);
+              if (highlightTimer) { clearTimeout(highlightTimer); highlightTimer = null; }
+            }
+          }
+        }
+        continue;
+      }
+      // The pin's element is now reachable: tell the parent to drop any
+      // stale "blocked" alert for this comment.
+      if (blockedIds[p.id]) {
+        delete blockedIds[p.id];
+        post('step-reached', { id: p.id });
+      }
+      // Keep the selected element bordered while its thread is open. This
+      // also covers the blocked→found transition, where focusSelector never
+      // got a chance to place the border.
+      if (isPending) {
+        activeHighlight = p.selector;
+        activeHighlightPage = currentPage();
+        positionHighlight(el);
+        if (highlightTimer) { clearTimeout(highlightTimer); highlightTimer = null; }
+      }
+      appendPinDot(p, { left: r.left + r.width * p.x, top: r.top + r.height * p.y }, false);
     }
+  }
+
+  // A fixed, clearly-visible fallback position for a pin whose target isn't
+  // reachable yet (e.g. the wizard is gated behind required fields).
+  function pendingDotPosition() {
+    return { left: window.innerWidth / 2, top: 14 };
+  }
+
+  function appendPinDot(p, pos, pending) {
+    var dot = document.createElement('div');
+    var cls = 'uxer-pin' + (p.status === 'resolved' ? ' resolved' : '');
+    if (pending) cls += ' uxer-pin--pending';
+    dot.className = cls;
+    dot.textContent = String(p.index);
+    dot.style.left = pos.left + 'px';
+    dot.style.top = pos.top + 'px';
+    pinsLayer.appendChild(dot);
   }
 
   function refreshPositions() {
@@ -483,14 +651,23 @@
     if (d.type === 'mode') {
       mode = d.mode === 'comment' ? 'comment' : 'browse';
       if (mode === 'browse') clearHighlight();
+    } else if (d.type === 'config') {
+      parentStateConfig = d.state || null;
+      renderPins();
     } else if (d.type === 'pins') {
       pins = d.pins || [];
       renderPins();
     } else if (d.type === 'focus') {
+      if (d.persist && d.id) pendingId = d.id;
+      renderPins();
       focusWithStep(d.selector, d.step, 20, d.persist, d.id);
     } else if (d.type === 'navigate') {
+      if (d.persist && d.id) pendingId = d.id;
+      renderPins();
       navigateTo(d.url, d.selector, d.step, d.persist, d.id);
     } else if (d.type === 'clear') {
+      pendingId = null;
+      renderPins();
       clearHighlight();
     }
   });
@@ -502,10 +679,55 @@
     if (highlightTimer) { clearTimeout(highlightTimer); highlightTimer = null; }
   }
 
+  function isInsideOpenModal(el) {
+    var boxes = document.querySelectorAll('.pf-v6-c-modal-box, .pf-v5-c-modal-box, [role="dialog"]');
+    for (var i = 0; i < boxes.length; i++) {
+      var r = boxes[i].getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) continue;
+      if (boxes[i].contains(el)) return true;
+    }
+    return false;
+  }
+
+  // Close any open modal/overlay. Returns true if something was dismissed.
+  function closeOpenModals() {
+    var closed = false;
+    var dialogs = document.querySelectorAll('dialog[open]');
+    for (var i = 0; i < dialogs.length; i++) {
+      try { dialogs[i].close(); closed = true; } catch (e) {}
+    }
+    var boxes = document.querySelectorAll('.pf-v6-c-modal-box, .pf-v5-c-modal-box, [role="dialog"]');
+    for (var j = 0; j < boxes.length; j++) {
+      var r = boxes[j].getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) continue;
+      var close = boxes[j].querySelector(
+        '.pf-v6-c-modal-box__close button, .pf-v5-c-modal-box__close button, ' +
+        'button[aria-label="Close"], button[aria-label="close"]'
+      );
+      if (close) { close.click(); return true; }
+      closed = true;
+    }
+    // Escape fallback for overlays with no visible close button.
+    try {
+      document.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true
+      }));
+    } catch (e) {}
+    return closed;
+  }
+
   function focusSelector(selector, retries, persist) {
     if (typeof retries !== 'number') retries = 0;
     var el = findElement(selector);
     if (!el) {
+      if (retries > 0) {
+        setTimeout(function () { focusSelector(selector, retries - 1, persist); }, 150);
+      }
+      return;
+    }
+    // The target lives behind an open modal — dismiss it and retry so the
+    // comment actually becomes visible.
+    if (!isInsideOpenModal(el) && closeOpenModals()) {
       if (retries > 0) {
         setTimeout(function () { focusSelector(selector, retries - 1, persist); }, 150);
       }
@@ -560,6 +782,7 @@
       if (cur === replayStep) replayStuck++;
       else { replayStep = cur; replayStuck = 1; }
       if (block && replayStuck >= 3) {
+        if (id) blockedIds[id] = true;
         post('step-blocked', {
           id: id,
           selector: selector,
@@ -596,6 +819,15 @@
       return;
     }
 
+    // A validation/required-field gate is already detectable: clicking "Next"
+    // would only re-surface the errors and corrupt the wizard. Keep polling so
+    // the step-blocked detector above can report the gate, and so a human can
+    // fill the required fields to unblock us.
+    if (block) {
+      schedule();
+      return;
+    }
+
     var next = wizardNextButton();
     if (next && !next.disabled) {
       next.click();
@@ -608,18 +840,15 @@
     schedule();
   }
 
-  // Client-side navigate the SPA to a design URL (same origin), then focus
-  // an element. SPA deep links aren't served by the origin (e.g. GitHub
-  // Pages), so we drive the router in place instead of a full reload.
+  // Client-side navigate the SPA to a design URL, then focus an element. The
+  // design's router basename is already the persona origin's root, so the
+  // target is the design pathname as-is.
   function navigateTo(url, selector, step, persist, id) {
     try {
-      var a = new URL(url, base);
-      if (a.origin !== origin) return false;
-      var path = prefix + a.pathname + a.search + a.hash;
+      var a = new URL(url, window.location.href);
+      var path = a.pathname + a.search + a.hash;
       var cur = window.location.pathname + window.location.search + window.location.hash;
       if (path !== cur) {
-        // pushState goes through the patched version, which updates `base`
-        // and notifies the parent. The popstate triggers the router.
         history.pushState({}, '', path);
         window.dispatchEvent(new PopStateEvent('popstate', { state: history.state }));
       }
@@ -628,80 +857,37 @@
     } catch (e) { return false; }
   }
 
-  /* ---------- SPA proxying ---------- */
-
-  function patchFetch() {
-    var of = window.fetch;
-    if (typeof of !== 'function') return;
-    window.fetch = function (input, init) {
-      var url = typeof input === 'string' ? input : (input && input.url);
-      if (url && isSameOrigin(url)) {
-        if (typeof input === 'string') {
-          input = resUrl(url);
-        } else {
-          input = new Request(resUrl(url), input);
-        }
-      }
-      return of.call(this, input, init);
-    };
-  }
-
-  function patchXHR() {
-    if (!window.XMLHttpRequest) return;
-    var oo = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function (method, url) {
-      if (url && isSameOrigin(url)) url = resUrl(url);
-      return oo.call(this, method, url);
-    };
-  }
+  /* ---------- location tracking ---------- */
 
   function patchHistory() {
     var op = history.pushState;
     var or = history.replaceState;
     history.pushState = function (state, title, url) {
-      var target = url;
-      if (url) {
-        base = designUrl(url);
-        post('location', { url: base });
-        // Keep the URL as-is: the app's router already emits the
-        // path-preserving proxied path (its basename was rewritten).
-      }
-      return op.call(this, state, title, target);
+      if (url) post('location', { url: designUrl(url) });
+      return op.call(this, state, title, url);
     };
     history.replaceState = function (state, title, url) {
-      var target = url;
-      if (url) {
-        base = designUrl(url);
-        post('location', { url: base });
-      }
-      return or.call(this, state, title, target);
+      if (url) post('location', { url: designUrl(url) });
+      return or.call(this, state, title, url);
     };
     window.addEventListener('popstate', function () {
-      base = designUrl(window.location.pathname + window.location.search);
-      post('location', { url: base });
+      post('location', { url: designUrl(window.location.href) });
     });
     window.addEventListener('hashchange', function () {
-      base = designUrl(window.location.href);
-      post('location', { url: base });
+      post('location', { url: designUrl(window.location.href) });
     });
   }
 
-  // Reverse-map a proxied URL back to the real origin URL (for window.open).
-  function unproxied(u) {
-    return designUrl(u);
-  }
-
+  // Open external links on the design's real origin.
   function patchOpen() {
     var ow = window.open;
     if (typeof ow !== 'function') return;
     window.open = function (url) {
-      var abs = url ? unproxied(url) : url;
+      var abs = url ? designUrl(url) : url;
       return ow.call(window, abs || '', '_blank');
     };
   }
 
-  patchFetch();
-  patchXHR();
   patchHistory();
   patchOpen();
 
@@ -718,7 +904,7 @@
 
   function ready() {
     if (mountOverlay()) {
-      post('ready', { url: base, prefix: prefix });
+      post('ready', { url: base });
       renderPins();
     }
   }

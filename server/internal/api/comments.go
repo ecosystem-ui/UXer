@@ -16,7 +16,7 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := s.DB.SQL.Query(
-		`SELECT c.id, c.version_id, c.selector, c.text_excerpt, c.page_url, c.step, c.x, c.y, c.body,
+		`SELECT c.id, c.version_id, c.selector, c.text_excerpt, c.page_url, c.step, c.state, c.state_mode, c.x, c.y, c.body,
 		        c.status, c.author_id, c.created_at, c.resolved_at, c.resolved_version_id,
 		        u.email, u.name
 		 FROM comments c JOIN users u ON u.id = c.author_id
@@ -32,7 +32,7 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var c db.Comment
 		var author db.User
-		if err := rows.Scan(&c.ID, &c.VersionID, &c.Selector, &c.TextExcerpt, &c.PageURL, &c.Step, &c.X, &c.Y, &c.Body,
+		if err := rows.Scan(&c.ID, &c.VersionID, &c.Selector, &c.TextExcerpt, &c.PageURL, &c.Step, &c.State, &c.StateMode, &c.X, &c.Y, &c.Body,
 			&c.Status, &c.AuthorID, &c.CreatedAt, &c.ResolvedAt, &c.ResolvedVersionID,
 			&author.Email, &author.Name); err != nil {
 			writeError(w, http.StatusInternalServerError, "scan failed")
@@ -107,6 +107,8 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 		TextExcerpt string  `json:"text_excerpt"`
 		PageURL     string  `json:"page_url"`
 		Step        string  `json:"step"`
+		State       string  `json:"state"`
+		StateMode   string  `json:"state_mode"`
 		X           float64 `json:"x"`
 		Y           float64 `json:"y"`
 		Body        string  `json:"body"`
@@ -127,9 +129,9 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 	id := db.NewID()
 	ts := now()
 	if _, err := s.DB.SQL.Exec(
-		`INSERT INTO comments (id, version_id, selector, text_excerpt, page_url, step, x, y, body, status, author_id, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`,
-		id, v.ID, body.Selector, body.TextExcerpt, body.PageURL, body.Step, body.X, body.Y, strings.TrimSpace(body.Body), u.ID, ts,
+		`INSERT INTO comments (id, version_id, selector, text_excerpt, page_url, step, state, state_mode, x, y, body, status, author_id, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`,
+		id, v.ID, body.Selector, body.TextExcerpt, body.PageURL, body.Step, body.State, body.StateMode, body.X, body.Y, strings.TrimSpace(body.Body), u.ID, ts,
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, "create failed")
 		return
@@ -253,11 +255,11 @@ func (s *Server) loadComment(id string, _ *db.User) *db.Comment {
 	var c db.Comment
 	var author db.User
 	err := s.DB.SQL.QueryRow(
-		`SELECT c.id, c.version_id, c.selector, c.text_excerpt, c.page_url, c.step, c.x, c.y, c.body,
+		`SELECT c.id, c.version_id, c.selector, c.text_excerpt, c.page_url, c.step, c.state, c.state_mode, c.x, c.y, c.body,
 		        c.status, c.author_id, c.created_at, c.resolved_at, c.resolved_version_id,
 		        u.email, u.name
 		 FROM comments c JOIN users u ON u.id = c.author_id WHERE c.id = ?`, id,
-	).Scan(&c.ID, &c.VersionID, &c.Selector, &c.TextExcerpt, &c.PageURL, &c.Step, &c.X, &c.Y, &c.Body,
+	).Scan(&c.ID, &c.VersionID, &c.Selector, &c.TextExcerpt, &c.PageURL, &c.Step, &c.State, &c.StateMode, &c.X, &c.Y, &c.Body,
 		&c.Status, &c.AuthorID, &c.CreatedAt, &c.ResolvedAt, &c.ResolvedVersionID,
 		&author.Email, &author.Name)
 	if err != nil {
