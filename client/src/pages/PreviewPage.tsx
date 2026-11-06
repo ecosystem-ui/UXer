@@ -25,6 +25,7 @@ import {
   FilterSeg,
   NewCommentComposer,
   normalizeDesignUrl,
+  blockedHint,
   type Filter,
   type Sort,
   type BlockedInfo,
@@ -48,6 +49,7 @@ export default function PreviewPage() {
   const [currentUrl, setCurrentUrl] = useState('');
   const [role, setRole] = useState<'owner' | 'viewer'>('viewer');
   const [blocked, setBlocked] = useState<Record<string, BlockedInfo>>({});
+  const [guide, setGuide] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const pinsRef = useRef<Pin[]>([]);
@@ -121,13 +123,12 @@ export default function PreviewPage() {
       } else if (d.type === 'step-blocked') {
         const id = typeof d.id === 'string' ? d.id : null;
         if (id) {
-          setBlocked((b) => ({
-            ...b,
-            [id]: {
-              stepLabel: typeof d.stepLabel === 'string' ? d.stepLabel : undefined,
-              reason: typeof d.reason === 'string' ? d.reason : undefined,
-            },
-          }));
+          const info: BlockedInfo = {
+            stepLabel: typeof d.stepLabel === 'string' ? d.stepLabel : undefined,
+            reason: typeof d.reason === 'string' ? d.reason : undefined,
+          };
+          setBlocked((b) => ({ ...b, [id]: info }));
+          setGuide(blockedHint(info));
         }
       } else if (d.type === 'step-reached') {
         const id = typeof d.id === 'string' ? d.id : null;
@@ -138,6 +139,7 @@ export default function PreviewPage() {
             delete rest[id];
             return rest;
           });
+          setGuide(null);
         }
       }
     };
@@ -176,12 +178,13 @@ export default function PreviewPage() {
     sendToBridge(iframeRef.current?.contentWindow ?? null, { source: 'uxer', type: 'pins', pins });
   }, [pins, comments]);
 
-  const sendFocus = (selector: string, persist = false, step = '', id = '') => {
+  const sendFocus = (selector: string, persist = false, step = '', id = '', state = '') => {
     sendToBridge(iframeRef.current?.contentWindow ?? null, {
       source: 'uxer',
       type: 'focus',
       selector,
       step,
+      state,
       persist,
       id,
     });
@@ -205,14 +208,15 @@ export default function PreviewPage() {
     });
     const target = normalizeDesignUrl(c.page_url);
     const step = c.step || '';
+    const state = c.state || '';
     // No page URL recorded (legacy): just focus on the current page.
     if (!target) {
-      sendFocus(c.selector, persist, step, c.id);
+      sendFocus(c.selector, persist, step, c.id, state);
       return;
     }
     // Already on the comment's page: just focus the element.
     if (currentUrl === target) {
-      sendFocus(c.selector, persist, step, c.id);
+      sendFocus(c.selector, persist, step, c.id, state);
       return;
     }
     // Navigate the SPA client-side via the bridge (same origin). Deep links
@@ -232,6 +236,7 @@ export default function PreviewPage() {
         url: target,
         selector: c.selector,
         step,
+        state,
         persist,
         id: c.id,
       });
@@ -448,16 +453,14 @@ export default function PreviewPage() {
                 startIcon={<AddCommentIcon sx={{ fontSize: 16 }} />}
                 sx={{
                   border: '1px solid',
-                  borderColor: commentMode ? 'primary.main' : 'divider',
-                  bgcolor: commentMode ? 'primary.main' : 'transparent',
-                  color: commentMode ? 'primary.contrastText' : 'text.primary',
+                  borderColor: tokens.ink,
+                  bgcolor: tokens.ink,
+                  color: '#ffffff',
                   px: 1.5,
                   py: 0.75,
                   fontSize: 14,
                   fontWeight: 500,
-                  '&:hover': commentMode
-                    ? { bgcolor: 'primary.main' }
-                    : { bgcolor: tokens.muted, borderColor: 'divider' },
+                  '&:hover': { bgcolor: tokens.ink },
                   '&.Mui-disabled': {
                     color: 'text.disabled',
                     borderColor: 'divider',
@@ -670,6 +673,17 @@ export default function PreviewPage() {
       >
         <Alert onClose={() => setError(null)} severity="error" variant="filled">
           {error}
+        </Alert>
+      </Snackbar>
+
+      <Snackbar
+        open={guide !== null}
+        autoHideDuration={6000}
+        onClose={() => setGuide(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert onClose={() => setGuide(null)} severity="warning" variant="filled">
+          {guide}
         </Alert>
       </Snackbar>
     </Box>

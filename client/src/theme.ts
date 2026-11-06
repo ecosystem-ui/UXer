@@ -38,17 +38,17 @@ export const lightTokens: Tokens = {
 
 export const darkTokens: Tokens = {
   foreground: '#f1f5f9',
-  canvas: '#0b1220',
-  surface: '#141b22',
-  surfaceBorder: '#29333d',
-  muted: '#1e293b',
-  mutedForeground: '#94a3b8',
-  border: '#334155',
-  open: '#60a5fa',
-  openSoft: '#1e3a8a',
+  canvas: '#0b1714',
+  surface: '#10211c',
+  surfaceBorder: '#244137',
+  muted: '#193029',
+  mutedForeground: '#9ab5aa',
+  border: '#2f4a40',
+  open: '#79d6c6',
+  openSoft: '#20343b',
   resolved: '#34d399',
   resolvedSoft: '#064e3b',
-  ink: '#475569',
+  ink: '#0d7f78',
 };
 
 export const tokensFor = (mode: ColorMode): Tokens => (mode === 'dark' ? darkTokens : lightTokens);

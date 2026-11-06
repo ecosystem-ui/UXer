@@ -17,6 +17,7 @@ e2e/
 ├── projects.spec.ts        # create project + persona, share a project
 ├── collaboration.spec.ts   # three users collaborating across two projects
 ├── comment-routing.spec.ts # comments in the proxied iframe + fallback guidance
+├── view-routing.spec.ts    # same-URL subview replay (VM detail / wizard open+close)
 └── README.md               # this file
 ```
 

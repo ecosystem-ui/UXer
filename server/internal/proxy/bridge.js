@@ -45,7 +45,37 @@
   var PF_DEFAULT_CONTROLS = [
     { key: 'step', selector: '.pf-v6-c-wizard__nav-link, .pf-v5-c-wizard__nav-link', value: 'wizard-step' },
     { key: 'nav', selector: '.pf-v6-c-nav__link.pf-m-current, .pf-v5-c-nav__link.pf-m-current, .pf-v6-c-nav__link[aria-current="page"], .pf-v5-c-nav__link[aria-current="page"]', value: 'text' },
-    { key: 'tab', selector: '.pf-v6-c-tabs__item.pf-m-current .pf-v6-c-tabs__item-text, .pf-v5-c-tabs__item.pf-m-current .pf-v5-c-tabs__item-text', value: 'text' }
+    { key: 'tab', selector: '.pf-v6-c-tabs__item.pf-m-current .pf-v6-c-tabs__item-text, .pf-v5-c-tabs__item.pf-m-current .pf-v5-c-tabs__item-text', value: 'text' },
+    // Selected virtual machine in the VM-detail subview. Scoped to the active
+    // view so the key only contributes while the detail is actually open.
+    { key: 'vm', selector: '#view-vm.pf-m-active .ethan-detail-header__title', value: 'text' },
+    // A PatternFly wizard is currently open/visible (overlay, modal, or
+    // full-page). Its step is the separate `step` control above.
+    { key: 'wizard', selector: '.pf-v6-c-wizard, .pf-v5-c-wizard', value: 'visible' }
+  ];
+
+  // Built-in view-replay rules for PatternFly apps. Each entry maps a control
+  // key to an opener: call a page-provided global opener (`call`) when set,
+  // otherwise click the first element whose `value` matches the recorded
+  // value. `close` describes how to leave the subview when the comment was
+  // recorded elsewhere. Pages can override this via window.__UXER_STATE__.reveal.
+  var PF_DEFAULT_REVEAL = [
+    {
+      key: 'vm',
+      selector: '[data-open-vm]',
+      value: 'attr:data-open-vm',
+      action: 'click',
+      call: 'openVmDetail',
+      close: { selector: '[data-breadcrumb-vms]' }
+    },
+    {
+      key: 'wizard',
+      selector: '#btn-create',
+      action: 'open',
+      call: 'openWizard',
+      args: ['template'],
+      close: { selector: '#wiz-close' }
+    }
   ];
 
   function post(type, data) {
@@ -159,27 +189,115 @@
 
   // Resolve a selector that may carry a text constraint of the form
   //   <css>:uxer-text("<exact text>")
+  // or a labelled-field anchor of the form
+  //   <wrap>:has(<label>:uxer-text("<label text>")) > <leaf>
   // Plain CSS selectors pass through to querySelector. Text constraints let us
   // anchor on stable classes + content (e.g. a card title) instead of a
   // brittle structural nth-of-type path.
   function queryAll(sel) {
     if (!sel) return [];
-    var m = /^(.*?):uxer-text\("((?:[^"\\]|\\.)*)"\)$/.exec(sel);
-    if (!m) {
+    if (sel.indexOf(':uxer-text(') === -1) {
       try { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
       catch (e) { return []; }
     }
-    var base = m[1];
-    var text = m[2].replace(/\\(["\\])/g, '$1');
-    var els = [];
-    try { els = Array.prototype.slice.call(document.querySelectorAll(base)); }
+    return resolveCustomSelector(sel);
+  }
+
+  // Handles the two custom selector shapes generated above. Only one level of
+  // nesting is needed because uniqueSelector only emits a single :has(...).
+  function resolveCustomSelector(sel) {
+    var has = /^([\s\S]*?):has\(([^()]*?):uxer-text\("((?:[^"\\]|\\.)*)"\)\)([\s\S]*)$/.exec(sel);
+    if (has) {
+      var outerSel = has[1].replace(/\s+$/, '');
+      var innerBase = has[2];
+      var labelText = has[3].replace(/\\(["\\])/g, '$1');
+      var rest = has[4];
+      var outers = [];
+      try { outers = Array.prototype.slice.call(document.querySelectorAll(outerSel)); }
+      catch (e) { return []; }
+      var matches = [];
+      for (var i = 0; i < outers.length; i++) {
+        var labelled = false;
+        try {
+          var labels = outers[i].querySelectorAll(innerBase);
+          for (var j = 0; j < labels.length; j++) {
+            if (normalizeText(labels[j]) === labelText) { labelled = true; break; }
+          }
+        } catch (e) {}
+        if (!labelled) continue;
+        var tail = rest.replace(/^\s*>?\s*/, '');
+        if (!tail) {
+          matches.push(outers[i]);
+          continue;
+        }
+        try {
+          var descendants = outers[i].querySelectorAll(tail);
+          for (var k = 0; k < descendants.length; k++) matches.push(descendants[k]);
+        } catch (e) {}
+      }
+      return matches;
+    }
+
+    var t = /^([\s\S]*?):uxer-text\("((?:[^"\\]|\\.)*)"\)$/.exec(sel);
+    if (t) {
+      var base = t[1];
+      var text = t[2].replace(/\\(["\\])/g, '$1');
+      var els = [];
+      try { els = Array.prototype.slice.call(document.querySelectorAll(base)); }
+      catch (e) { return []; }
+      return els.filter(function (el) { return normalizeText(el) === text; });
+    }
+
+    try { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
     catch (e) { return []; }
-    return els.filter(function (el) { return normalizeText(el) === text; });
   }
 
   function findElement(sel) {
     var all = queryAll(sel);
     return all.length ? all[0] : null;
+  }
+
+  // The nearest short-text "label" descendant of a wrapper (a form/detail
+  // field label, a table header, or a term). Used to disambiguate repeated
+  // values such as many "Not configured" cells inside a detail view.
+  function labelDescendant(scope) {
+    if (!scope.querySelectorAll) return null;
+    var cands = scope.querySelectorAll(
+      'label, th, dt, [class*="__label"], [class*="-label"]'
+    );
+    for (var i = 0; i < cands.length; i++) {
+      var c = cands[i];
+      if (!stableClassSelector(c)) continue;
+      var t = normalizeText(c);
+      if (t && t.length <= 80) return c;
+    }
+    return null;
+  }
+
+  // Build a stable selector for a leaf element by anchoring it on a labelled
+  // ancestor, e.g. `.ethan-detail-field:has(.ethan-detail-field__label:uxer-text("Cloud-init")) > .ethan-detail-field__value`.
+  // This stays resolvable even when the leaf's own text ("Not configured")
+  // appears many times on the page. Returns '' when no unique anchor exists.
+  function labelledFieldSelector(el) {
+    var leafCls = stableClassSelector(el);
+    // Keep the anchor on the leaf itself so the recorded pin x/y (relative to
+    // the leaf's box) stays accurate. Without a stable leaf class there is no
+    // reliable descendant selector, so fall back to the structural path.
+    if (!leafCls) return '';
+    var node = el.parentElement;
+    for (var i = 0; i < 6 && node && node.nodeType === 1 && node !== document.body; i++, node = node.parentElement) {
+      var wrapCls = stableClassSelector(node);
+      if (!wrapCls) continue;
+      var label = labelDescendant(node);
+      if (!label) continue;
+      var labelCls = stableClassSelector(label);
+      var labelText = normalizeText(label);
+      if (!labelCls || !labelText) continue;
+      var inner = labelCls + ':uxer-text("' + escapeText(labelText) + '")';
+      var sel = wrapCls + ':has(' + inner + ') > ' + leafCls;
+      if (queryAll(sel).length === 1) return sel;
+    }
+    return '';
   }
 
   function uniqueSelector(el) {
@@ -226,6 +344,11 @@
         var ts = clsSel + ':uxer-text("' + escapeText(ownText) + '")';
         if (queryAll(ts).length === 1) return ts;
       }
+      // The leaf's own text is ambiguous (e.g. several "Not configured"
+      // values in a detail view): anchor it on its labelled field instead of
+      // falling back to a brittle structural nth-of-type path.
+      var labelled = labelledFieldSelector(el);
+      if (labelled) return labelled;
     }
 
     // Path of nth-of-type segments up to the first stable ancestor.
@@ -283,19 +406,38 @@
     );
   }
 
+  // Read a value spec off an element: 'text' | 'value' | 'checked' | 'id' |
+  // 'present' | 'visible' | 'attr:<name>'. Shared by control reads and reveal
+  // matching.
+  function readValue(el, spec) {
+    if (spec === 'text') return normalizeText(el);
+    if (spec === 'value') return el.value != null ? String(el.value) : '';
+    if (spec === 'checked') return el.checked ? '1' : '0';
+    if (spec === 'id') return el.id || '';
+    if (spec === 'present') return '1';
+    if (spec === 'visible') {
+      var r = el.getBoundingClientRect();
+      return r.width > 0 || r.height > 0 ? '1' : '';
+    }
+    if (typeof spec === 'string' && spec.indexOf('attr:') === 0) {
+      return el.getAttribute(spec.slice(5)) || '';
+    }
+    return '';
+  }
+
   // Extract the value a declarative control contributes to the state key.
   function controlValue(spec) {
     if (spec.value === 'wizard-step') return currentStepKey();
+    if (spec.value === 'visible') {
+      var els = document.querySelectorAll(spec.selector);
+      for (var i = 0; i < els.length; i++) {
+        if (readValue(els[i], 'visible') === '1') return '1';
+      }
+      return '';
+    }
     var el = document.querySelector(spec.selector);
     if (!el) return '';
-    if (spec.value === 'text') return (el.textContent || '').replace(/\s+/g, ' ').trim();
-    if (spec.value === 'value') return el.value != null ? String(el.value) : '';
-    if (spec.value === 'checked') return el.checked ? '1' : '0';
-    if (spec.value === 'id') return el.id || '';
-    if (typeof spec.value === 'string' && spec.value.indexOf('attr:') === 0) {
-      return el.getAttribute(spec.value.slice(5)) || '';
-    }
-    return '';
+    return readValue(el, spec.value);
   }
 
   // Deterministic, order-independent key from a set of declarative controls.
@@ -348,6 +490,20 @@
     }
     if (detectPatternFly()) return PF_DEFAULT_CONTROLS;
     return null;
+  }
+
+  // The active view-replay rules, mirroring activeControls(). Pages declare
+  // them in window.__UXER_STATE__.reveal; when absent and the page has
+  // PatternFly chrome, the built-in PatternFly defaults apply.
+  function activeReveal() {
+    if (window.__UXER_STATE__ && Array.isArray(window.__UXER_STATE__.reveal)) {
+      return window.__UXER_STATE__.reveal;
+    }
+    if (parentStateConfig && Array.isArray(parentStateConfig.reveal)) {
+      return parentStateConfig.reveal;
+    }
+    if (detectPatternFly()) return PF_DEFAULT_REVEAL;
+    return [];
   }
 
   // Compute the current view-state key and its mode ('declarative' | 'auto').
@@ -660,11 +816,11 @@
     } else if (d.type === 'focus') {
       if (d.persist && d.id) pendingId = d.id;
       renderPins();
-      focusWithStep(d.selector, d.step, 20, d.persist, d.id);
+      focusWithStep(d.selector, d.step, 20, d.persist, d.id, d.state);
     } else if (d.type === 'navigate') {
       if (d.persist && d.id) pendingId = d.id;
       renderPins();
-      navigateTo(d.url, d.selector, d.step, d.persist, d.id);
+      navigateTo(d.url, d.selector, d.step, d.persist, d.id, d.state);
     } else if (d.type === 'clear') {
       pendingId = null;
       renderPins();
@@ -741,14 +897,136 @@
     if (!persist) highlightTimer = setTimeout(clearHighlight, 2500);
   }
 
-  // Focus an element, optionally replaying a wizard to its recorded step first
-  // (see currentStepKey / wizardNextButton). When the wizard can't advance
+  // Parse a declarative state key ("key=value|key=value") into a map.
+  function parseState(state) {
+    var out = {};
+    if (typeof state !== 'string' || !state) return out;
+    var parts = state.split('|');
+    for (var i = 0; i < parts.length; i++) {
+      var kv = parts[i].split('=');
+      if (kv.length === 2 && kv[0]) out[kv[0]] = kv[1];
+    }
+    return out;
+  }
+
+  // Reveal one recorded view value: call the page's global opener (`call`)
+  // when configured, otherwise click the first matching opener element. When
+  // `action` is 'open' there is no value to match — a single opener element
+  // is clicked (or `call` invoked with `args`).
+  function performReveal(entry, value) {
+    if (entry.action === 'open') {
+      if (entry.call && typeof window[entry.call] === 'function') {
+        try { window[entry.call].apply(window, entry.args || []); return true; } catch (e) {}
+      }
+      if (entry.selector) {
+        var openEl = document.querySelector(entry.selector);
+        if (openEl && !openEl.disabled) { openEl.click(); return true; }
+      }
+      return false;
+    }
+    if (entry.call && typeof window[entry.call] === 'function') {
+      try { window[entry.call](value); return true; } catch (e) {}
+    }
+    if (entry.selector) {
+      var cands = document.querySelectorAll(entry.selector);
+      for (var i = 0; i < cands.length; i++) {
+        if (readValue(cands[i], entry.value || 'text') === value) {
+          cands[i].click();
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Leave a subview: call a page-provided global function (`close.call`) when
+  // configured, otherwise click a "back" element (`close.selector`).
+  function performClose(close) {
+    if (!close) return false;
+    if (close.call && typeof window[close.call] === 'function') {
+      try { window[close.call].apply(window, close.args || []); return true; } catch (e) {}
+    }
+    if (close.selector) {
+      var el = document.querySelector(close.selector);
+      if (el) { el.click(); return true; }
+    }
+    return false;
+  }
+
+  // Focus an element, replaying its recorded view state (declarative controls
+  // that have a reveal rule) and wizard step first. See currentStepKey /
+  // wizardNextButton for the step replay; when the wizard can't advance
   // because required fields / validation block it, we post a `step-blocked`
   // message with guidance instead of polling until the budget runs out.
-  function focusWithStep(selector, step, retries, persist, id) {
+  function focusWithStep(selector, step, retries, persist, id, state) {
     replayStep = '';
     replayStuck = 0;
-    stepLoop(selector, step, retries, persist, id);
+    // Each focus attempt re-detects blocks from scratch, matching the parent
+    // clearing its per-comment blocked state on click.
+    if (id) delete blockedIds[id];
+    viewLoop(selector, step, state, retries, persist, id);
+  }
+
+  // Ensure every recorded subview value with a reveal rule matches the current
+  // page before focusing. Keys recorded in `state` are opened; keys that are
+  // absent from `state` but currently open are closed (e.g. leaving a VM
+  // detail back to its list). Once all views match, hand off to the
+  // wizard-step loop, which focuses the selector.
+  function viewLoop(selector, step, state, retries, persist, id) {
+    var recorded = parseState(state);
+    var controls = activeControls() || [];
+    var reveal = activeReveal();
+    var todo = [];
+    for (var i = 0; i < reveal.length; i++) {
+      var entry = reveal[i];
+      var key = entry.key;
+      var target = key ? recorded[key] : undefined;
+      var control = null;
+      for (var j = 0; j < controls.length; j++) {
+        if (controls[j].key === key) { control = controls[j]; break; }
+      }
+      var current = control ? controlValue(control) : '';
+      if (target != null) {
+        if (current !== target) todo.push({ type: 'open', entry: entry, value: target });
+      } else if (current) {
+        todo.push({ type: 'close', entry: entry });
+      }
+    }
+
+    if (todo.length === 0) {
+      stepLoop(selector, step, retries, persist, id);
+      return;
+    }
+
+    for (var k = 0; k < todo.length; k++) {
+      var item = todo[k];
+      if (item.type === 'open') {
+        performReveal(item.entry, item.value);
+      } else {
+        performClose(item.entry.close);
+      }
+    }
+
+    if (retries > 0) {
+      setTimeout(function () { viewLoop(selector, step, state, retries - 1, persist, id); }, 200);
+    } else {
+      // Retries exhausted: report any wizard subview we couldn't open so the
+      // reviewer can open it manually.
+      for (var k2 = 0; k2 < todo.length; k2++) {
+        var item = todo[k2];
+        if (item.type === 'open' && item.entry.key === 'wizard' && id && !blockedIds[id]) {
+          blockedIds[id] = true;
+          post('step-blocked', {
+            id: id,
+            selector: selector,
+            step: step,
+            stepLabel: wizardStepLabel(step),
+            reason: 'wizard-not-open'
+          });
+        }
+      }
+      stepLoop(selector, step, 10, persist, id);
+    }
   }
 
   function stepLoop(selector, step, retries, persist, id) {
@@ -843,7 +1121,7 @@
   // Client-side navigate the SPA to a design URL, then focus an element. The
   // design's router basename is already the persona origin's root, so the
   // target is the design pathname as-is.
-  function navigateTo(url, selector, step, persist, id) {
+  function navigateTo(url, selector, step, persist, id, state) {
     try {
       var a = new URL(url, window.location.href);
       var path = a.pathname + a.search + a.hash;
@@ -852,7 +1130,7 @@
         history.pushState({}, '', path);
         window.dispatchEvent(new PopStateEvent('popstate', { state: history.state }));
       }
-      if (selector) focusWithStep(selector, step, 40, persist, id);
+      if (selector) focusWithStep(selector, step, 40, persist, id, state);
       return true;
     } catch (e) { return false; }
   }

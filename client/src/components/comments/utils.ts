@@ -87,5 +87,8 @@ export function pageLabel(c: Comment): string {
 
 export function blockedHint(info: BlockedInfo): string {
   const label = info.stepLabel?.trim() || 'that step';
+  if (info.reason === 'wizard-not-open') {
+    return `This comment is inside the creation wizard. Open the wizard and go to the “${label}” step — the pin will appear there.`;
+  }
   return `The wizard can't reach “${label}” automatically — a required field is missing or invalid. Click through the wizard (filling in required fields) to the “${label}” step and the pin will appear there.`;
 }

@@ -100,14 +100,14 @@ test.describe('comment routing', () => {
       await reportBlocked();
 
       // The card now shows the manual-fallback guidance with an error icon.
-      await expect(page.getByText(/The wizard can't reach .* automatically/)).toBeVisible();
+      await expect(page.getByText(/The wizard can't reach .* automatically/).first()).toBeVisible();
 
       // Opening the thread re-runs focus (which clears the stale flag); the
       // bridge re-reports the block, so the detail view surfaces it too.
       await page.getByText('Gated step comment', { exact: true }).click();
       await expect(page.getByText(/Thread #/)).toBeVisible();
       await reportBlocked();
-      await expect(page.getByText(/The wizard can't reach .* automatically/)).toBeVisible();
+      await expect(page.getByText(/The wizard can't reach .* automatically/).first()).toBeVisible();
     } finally {
       await ctx.close();
     }
@@ -156,7 +156,7 @@ test.describe('comment routing', () => {
 
       // The bridge reports the required-fields gate instead of clicking
       // "Next", so the parent surfaces the manual-fallback guidance.
-      await expect(page.getByText(/The wizard can't reach .* automatically/)).toBeVisible({
+      await expect(page.getByText(/The wizard can't reach .* automatically/).first()).toBeVisible({
         timeout: 15_000,
       });
 

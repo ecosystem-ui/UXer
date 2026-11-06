@@ -2,6 +2,10 @@ import type { Page } from '@playwright/test';
 
 export const OSAC_URL = 'https://osac-project.github.io/osac-ux/';
 
+// The VM list / detail / creation-wizard prototype, used by the view-routing
+// specs (same-origin subviews that don't change the URL).
+export const VMAS_URL = 'https://osac-project.github.io/osac-ux/vmaas-ux-prototype.html';
+
 export interface TestUser {
   name: string;
   email: string;
@@ -114,6 +118,10 @@ export interface SeedCommentInput {
   text_excerpt: string;
   page_url: string;
   step: string;
+  /** Declarative view-state key (e.g. `nav=Virtual machines|vm=azure-baboon-27`). */
+  state?: string;
+  /** How `state` was produced: 'declarative' (default) | 'auto'. */
+  state_mode?: string;
   x: number;
   y: number;
   body: string;

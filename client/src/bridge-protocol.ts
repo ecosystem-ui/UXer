@@ -36,9 +36,45 @@ export interface StateControl {
   activate?: 'click';
 }
 
+/** How to leave a subview (e.g. go back from a detail view to its list). */
+export interface RevealClose {
+  /** Optional global function name to call (with `args`) to leave the subview. */
+  call?: string;
+  /** Arguments passed to `call`. */
+  args?: unknown[];
+  /** CSS selector of a "back" element to click when no `call` is available. */
+  selector?: string;
+}
+
+/**
+ * A declarative view-replay rule: how to reach (or leave) a recorded control
+ * value. Matches a `StateControl.key`; when that control's recorded value
+ * differs from the current page value, the bridge calls `call` (a global
+ * function) or clicks the first opener element whose `value` matches the
+ * recorded value. When the control is absent from the recorded state but
+ * currently open, the bridge applies `close` instead.
+ */
+export interface RevealControl {
+  /** Matches a StateControl.key. */
+  key: string;
+  /** CSS selector for candidate opener elements (used when no `call`). */
+  selector?: string;
+  /** How to read an opener's target value: 'text' (default) | 'value' | 'checked' | 'id' | 'attr:<name>'. */
+  value?: string;
+  /** 'click' (default) matches openers by `value`; 'open' clicks a single opener / calls `call`. */
+  action?: string;
+  /** Optional global opener function name to call with the recorded value. */
+  call?: string;
+  /** Arguments passed to `call` (used with action 'open'). */
+  args?: unknown[];
+  /** How to leave this subview when the comment was recorded elsewhere. */
+  close?: RevealClose;
+}
+
 /** Persona-level declarative state config, sent to the bridge. */
 export interface StateConfig {
   controls: StateControl[];
+  reveal?: RevealControl[];
 }
 
 // Messages sent from the parent React app to the bridge inside the iframe.
@@ -51,6 +87,7 @@ export type ParentMessage =
       type: 'focus';
       selector: string;
       step?: string;
+      state?: string;
       persist?: boolean;
       id?: string;
     }
@@ -60,6 +97,7 @@ export type ParentMessage =
       url: string;
       selector: string;
       step?: string;
+      state?: string;
       persist?: boolean;
       id?: string;
     }

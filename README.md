@@ -152,6 +152,50 @@ Known limitations (documented, not blockers):
 - Iframes that the target site blocks via JavaScript (e.g. `top !== self`
   checks) cannot be overridden.
 
+### Declaring subviews for comment routing (generic)
+
+Comments on pages that switch views **without changing the URL** (SPA tabs,
+detail drawers, wizards) are routed via declarative state. A design page can
+declare its own model by setting `window.__UXER_STATE__` before it loads:
+
+```html
+<script>
+window.__UXER_STATE__ = {
+  // controls: how to READ the current view state. Each non-empty value
+  // contributes to the comment's stored `state` key.
+  controls: [
+    { key: 'view', selector: 'section.view.active', value: 'attr:id' }
+  ],
+  // reveal: how to REACH (or leave) a recorded value before focusing.
+  reveal: [
+    {
+      key: 'view',
+      selector: '[data-view]',       // opener clicked to reach `value`
+      value: 'attr:data-view',
+      action: 'click',
+      close: { selector: '[data-back]' } // optional: leave this subview
+    }
+  ]
+};
+</script>
+```
+
+- `controls` value extractors: `text` | `value` | `checked` | `id` |
+  `wizard-step` | `present` | `attr:<name>`. `present` records `1` when the
+  element exists (useful for modal/overlay subviews like a creation wizard).
+- `reveal` entries map a control `key` to an opener: either `call` (a global
+  function name called with the recorded value) or `selector` + `value` (the
+  first element whose value matches is clicked). The recorded value and the
+  opener value must be in the same value space (e.g. a view id). Set
+  `action: 'open'` for a single opener with no value to match (`call` is
+  invoked with `args`, or the first `selector` element is clicked).
+- When a control is **absent** from the recorded state but currently open, the
+  bridge applies `close` (a `call` function, or a `selector` to click) so the
+  comment's own view is shown again — e.g. leaving a VM detail back to its list.
+- When a page omits `window.__UXER_STATE__`, PatternFly pages receive built-in
+  controls/reveal rules (nav, tabs, wizard steps, the VM-detail opener with its
+  back-to-list action, and the creation-wizard opener).
+
 ## Environment variables
 
 | Variable | Purpose |
