@@ -37,7 +37,7 @@ export default function FilterSeg({ value, onChange, counts }: FilterSegProps) {
             fontWeight: 500,
             textTransform: 'capitalize',
             color: value === f ? tokens.foreground : tokens.mutedForeground,
-            bgcolor: value === f ? 'background.paper' : 'transparent',
+            bgcolor: value === f ? tokens.surface : 'transparent',
             boxShadow: value === f ? '0 1px 2px rgba(2, 6, 24, 0.08)' : 'none',
             transition: 'all .15s ease',
             '&:hover': value !== f ? { color: tokens.foreground } : {},

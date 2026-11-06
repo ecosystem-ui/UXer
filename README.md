@@ -39,6 +39,11 @@ cp .env.example .env
 Set a random `SESSION_SECRET` (e.g. `openssl rand -hex 32`). No external OAuth
 provider is needed — users sign up and sign in with **email + password**.
 
+To email password-reset links, set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`,
+`SMTP_PASSWORD`, and `SMTP_FROM`, plus `UXER_APP_URL` (the public base URL for
+reset links). If `SMTP_HOST` is left empty, reset links are logged to stdout
+instead of being sent — useful for local development.
+
 ### 2. Install frontend dependencies
 
 ```bash
@@ -77,7 +82,9 @@ go build -o uxer ./cmd/uxer
 
 ## Usage
 
-1. Sign up with an email + password, then sign in.
+1. Sign up with an email + password, then sign in. If you forget your
+   password, use the **Forgot password?** link on the login page to receive a
+   reset link by email.
 2. Create a **project**.
 3. Add a **version** — a label plus the public design URL (page, prototype,
    Storybook, Figma link, etc.).

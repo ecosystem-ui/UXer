@@ -9,6 +9,8 @@ export type ColorMode = 'light' | 'dark';
 export interface Tokens {
   foreground: string;
   canvas: string;
+  surface: string;
+  surfaceBorder: string;
   muted: string;
   mutedForeground: string;
   border: string;
@@ -22,6 +24,8 @@ export interface Tokens {
 export const lightTokens: Tokens = {
   foreground: '#101817',
   canvas: '#f5f7f6',
+  surface: '#ffffff',
+  surfaceBorder: '#dfe4e2',
   muted: '#edf3f1',
   mutedForeground: '#737b79',
   border: '#d8dddb',
@@ -35,6 +39,8 @@ export const lightTokens: Tokens = {
 export const darkTokens: Tokens = {
   foreground: '#f1f5f9',
   canvas: '#0b1220',
+  surface: '#141b22',
+  surfaceBorder: '#29333d',
   muted: '#1e293b',
   mutedForeground: '#94a3b8',
   border: '#334155',

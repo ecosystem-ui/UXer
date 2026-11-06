@@ -176,7 +176,7 @@ export default function ThreadDetail({
       {/* Messages */}
       <Box sx={{ flexGrow: 1, overflowY: 'auto', bgcolor: tokens.canvas, p: 1.5 }}>
         <Box
-          sx={{ borderRadius: 2, border: 1, borderColor: 'divider', bgcolor: 'background.paper' }}
+          sx={{ borderRadius: 2, border: 1, borderColor: tokens.surfaceBorder, bgcolor: tokens.surface }}
         >
           <Box
             component="button"

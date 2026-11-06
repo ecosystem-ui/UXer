@@ -41,7 +41,7 @@ body,
   --card-border: #29333d;
   isolation: isolate;
   overflow: hidden;
-  min-height: 192px;
+  min-height: 148px;
   border: 1px solid var(--card-border) !important;
   border-radius: 11px !important;
   background: var(--card-surface) !important;
@@ -122,15 +122,15 @@ body,
 .project-card__folder {
   display: grid;
   place-items: center;
-  width: 54px;
-  height: 54px;
+  width: 42px;
+  height: 42px;
   border-radius: 10px;
   color: #79d6c6;
   background: #20343b;
 }
 
 .project-card__folder .MuiSvgIcon-root {
-  font-size: 29px;
+  font-size: 23px;
 }
 
 @keyframes project-card-border-roll {

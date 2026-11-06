@@ -100,16 +100,16 @@ export default function HomePage() {
           <Box className="projects-grid">
             {projects.map((p) => (
               <Box key={p.id} sx={{ minWidth: 0 }}>
-                <Card className={`project-card project-card--${mode}`} variant="outlined" sx={{ position: 'relative' }}>
-                  <CardActionArea onClick={() => navigate(`/projects/${p.id}`)} sx={{ minHeight: { xs: 180, md: 192 }, display: 'flex', alignItems: 'stretch' }}>
-                    <CardContent sx={{ width: '100%', p: { xs: 2, md: 2.5 }, pb: { xs: 2, md: 2.5 }, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                <Card className={`project-card project-card--${mode}`} variant="outlined" sx={{ position: 'relative', display: 'flex' }}>
+                  <CardActionArea onClick={() => navigate(`/projects/${p.id}`)} sx={{ flex: 1, minWidth: 0, minHeight: { xs: 136, md: 148 }, display: 'flex', alignItems: 'stretch' }}>
+                    <CardContent sx={{ width: '100%', p: { xs: 1.5, md: 1.75 }, pl: { xs: 2.5, md: 2.75 }, pb: { xs: 1.5, md: 1.75 }, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
                       <Box className="project-card__folder" aria-hidden="true">
                         <FolderOutlinedIcon />
                       </Box>
-                      <Typography variant="h5" noWrap sx={{ mt: 'auto', maxWidth: 'calc(100% - 24px)', fontWeight: 700, letterSpacing: -0.3 }}>
+                      <Typography variant="h6" noWrap sx={{ mt: 'auto', maxWidth: 'calc(100% - 24px)', fontWeight: 700, letterSpacing: -0.2 }}>
                         {p.name}
                       </Typography>
-                      <Typography variant="body1" sx={{ display: 'block', mt: 0.7, color: '#aeb8c2', fontSize: { xs: 13, md: 14 }, lineHeight: 1.35 }}>
+                      <Typography variant="body2" sx={{ display: 'block', mt: 0.45, color: '#8f9aa5', fontSize: { xs: 11, md: 12 }, lineHeight: 1.3 }}>
                         Updated {new Date(p.updated_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}{' · '}{new Date(p.updated_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
                       </Typography>
                       {p.role === 'viewer' && (
@@ -123,7 +123,7 @@ export default function HomePage() {
                     <IconButton
                       size="small"
                       aria-label={`Project actions for ${p.name}`}
-                      sx={{ position: 'absolute', top: { xs: 18, md: 28 }, right: { xs: 14, md: 28 }, color: '#f5f7fa' }}
+                      sx={{ alignSelf: 'flex-start', flexShrink: 0, mt: { xs: 1.5, md: 1.75 }, mr: 1, color: '#f5f7fa' }}
                       onClick={(e) => {
                         e.stopPropagation();
                         setMenuFor(p);

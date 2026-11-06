@@ -15,21 +15,33 @@ type ctxKey string
 
 const userKey ctxKey = "user"
 
+// Mailer delivers password-reset emails. It is an interface so handlers can
+// be tested with a fake.
+type Mailer interface {
+	SendPasswordReset(to, name, resetURL string) error
+}
+
 // Server wires the database, auth manager, and proxy into an HTTP handler.
 type Server struct {
 	DB          *db.DB
 	Auth        *auth.Manager
 	Proxy       *proxy.Handler
+	Mailer      Mailer
+	AppURL      string
 	authLimiter *rateLimiter
 }
 
-func NewServer(d *db.DB, a *auth.Manager, p *proxy.Handler) *Server {
-	return &Server{
+func NewServer(d *db.DB, a *auth.Manager, p *proxy.Handler, m ...Mailer) *Server {
+	s := &Server{
 		DB:          d,
 		Auth:        a,
 		Proxy:       p,
 		authLimiter: newRateLimiter(time.Minute, 20),
 	}
+	if len(m) > 0 {
+		s.Mailer = m[0]
+	}
+	return s
 }
 
 // Routes builds the full routing table. If static is non-nil it is used as
@@ -42,6 +54,8 @@ func (s *Server) Routes(static http.Handler) http.Handler {
 	mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
 	mux.HandleFunc("POST /api/auth/signup", s.rateLimit(s.handleSignup))
 	mux.HandleFunc("POST /api/auth/login", s.rateLimit(s.handleLogin))
+	mux.HandleFunc("POST /api/auth/forgot-password", s.rateLimit(s.handleForgotPassword))
+	mux.HandleFunc("POST /api/auth/reset-password", s.rateLimit(s.handleResetPassword))
 
 	// projects
 	mux.HandleFunc("GET /api/projects", s.requireUser(s.handleListProjects))

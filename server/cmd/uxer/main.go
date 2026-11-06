@@ -17,6 +17,7 @@ import (
 	"uxer/internal/api"
 	"uxer/internal/auth"
 	"uxer/internal/db"
+	"uxer/internal/mailer"
 	"uxer/internal/proxy"
 )
 
@@ -38,7 +39,14 @@ func main() {
 	mgr := auth.NewManager(secret)
 	px := proxy.NewHandler(secret)
 
-	apiSrv := api.NewServer(database, mgr, px)
+	mailCfg := mailer.ConfigFromEnv()
+	if mailCfg.AppURL == "" {
+		mailCfg.AppURL = "http://localhost:" + port
+	}
+	m := mailer.New(mailCfg)
+
+	apiSrv := api.NewServer(database, mgr, px, m)
+	apiSrv.AppURL = mailCfg.AppURL
 
 	var static http.Handler
 	if info, statErr := os.Stat(distDir); statErr == nil && info.IsDir() {

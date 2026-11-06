@@ -52,7 +52,7 @@ function CommentCard({
         borderRadius: 2,
         border: 1,
         borderColor: active ? tokens.open : 'divider',
-        bgcolor: 'background.paper',
+        bgcolor: tokens.surface,
         p: 1.5,
         opacity: resolved ? 0.75 : 1,
         transition: 'box-shadow .15s ease, border-color .15s ease',

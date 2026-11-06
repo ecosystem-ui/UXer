@@ -276,3 +276,123 @@ func TestSignupAndLogin(t *testing.T) {
 		t.Fatalf("me: %d", rec.Code)
 	}
 }
+
+type fakeMailer struct {
+	lastTo       string
+	lastResetURL string
+}
+
+func (f *fakeMailer) SendPasswordReset(to, name, resetURL string) error {
+	f.lastTo = to
+	f.lastResetURL = resetURL
+	return nil
+}
+
+func newTestServerWithMailer(t *testing.T) (*Server, http.Handler, *fakeMailer) {
+	t.Helper()
+	srv, h, _ := newTestServer(t)
+	fm := &fakeMailer{}
+	srv.Mailer = fm
+	srv.AppURL = "http://localhost:8088"
+	return srv, h, fm
+}
+
+func TestEmailValidationAndCaseInsensitiveUnique(t *testing.T) {
+	_, h, _ := newTestServer(t)
+
+	// Reject malformed emails at signup.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/signup",
+		strings.NewReader(`{"email":"not-an-email","password":"secret123"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid email signup: expected 400, got %d", rec.Code)
+	}
+
+	// First signup with mixed-case email succeeds.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/signup",
+		strings.NewReader(`{"email":"Case@Example.com","password":"secret123"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("mixed-case signup: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// The same email in a different case must be treated as a duplicate.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/signup",
+		strings.NewReader(`{"email":"case@example.com","password":"secret123"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("case-variant duplicate: expected 409, got %d", rec.Code)
+	}
+}
+
+func TestForgotAndResetPassword(t *testing.T) {
+	_, h, fm := newTestServerWithMailer(t)
+
+	// Known email returns a generic 200 and emails a reset link.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/forgot-password",
+		strings.NewReader(`{"email":"lia@example.com"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("forgot: %d %s", rec.Code, rec.Body.String())
+	}
+	if fm.lastTo != "lia@example.com" || !strings.Contains(fm.lastResetURL, "token=") {
+		t.Fatalf("expected reset email to lia@example.com, got to=%q url=%q", fm.lastTo, fm.lastResetURL)
+	}
+	token := fm.lastResetURL[strings.LastIndex(fm.lastResetURL, "token=")+len("token="):]
+	if token == "" {
+		t.Fatal("empty reset token in email")
+	}
+
+	// Reset the password with the token.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/reset-password",
+		strings.NewReader(`{"token":"`+token+`","password":"brand-new-pass"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reset: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Login succeeds with the new password.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/login",
+		strings.NewReader(`{"email":"lia@example.com","password":"brand-new-pass"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login after reset: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// The token is single-use.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/reset-password",
+		strings.NewReader(`{"token":"`+token+`","password":"another-pass"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("token reuse: expected 400, got %d", rec.Code)
+	}
+
+	// Unknown email is acknowledged identically (no enumeration) and sends no mail.
+	fm.lastTo = ""
+	fm.lastResetURL = ""
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/forgot-password",
+		strings.NewReader(`{"email":"nobody@example.com"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("forgot unknown: %d %s", rec.Code, rec.Body.String())
+	}
+	if fm.lastTo != "" || fm.lastResetURL != "" {
+		t.Fatalf("expected no email for unknown account, got to=%q url=%q", fm.lastTo, fm.lastResetURL)
+	}
+}

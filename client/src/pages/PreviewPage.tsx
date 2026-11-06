@@ -382,7 +382,7 @@ export default function PreviewPage() {
         display: 'flex',
         flexDirection: 'column',
         height: '100vh',
-        bgcolor: 'background.paper',
+        bgcolor: tokens.canvas,
       }}
     >
       {/* Header */}
@@ -396,7 +396,8 @@ export default function PreviewPage() {
           gap: 2,
           px: 2,
           borderBottom: 1,
-          borderColor: 'divider',
+          borderColor: tokens.surfaceBorder,
+          bgcolor: tokens.surface,
         }}
       >
         <IconButton
@@ -508,8 +509,8 @@ export default function PreviewPage() {
             flexDirection: 'column',
             borderLeft: { xs: 0, md: 1 },
             borderTop: { xs: 1, md: 0 },
-            borderColor: 'divider',
-            bgcolor: 'background.paper',
+            borderColor: tokens.surfaceBorder,
+            bgcolor: tokens.surface,
           }}
         >
           {detail ? (
@@ -532,7 +533,7 @@ export default function PreviewPage() {
                 sx={{
                   p: 2,
                   borderBottom: 1,
-                  borderColor: 'divider',
+                  borderColor: tokens.surfaceBorder,
                   display: 'flex',
                   flexDirection: 'column',
                   gap: 1.5,

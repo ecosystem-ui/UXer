@@ -16,23 +16,39 @@ import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import { useAuth } from '../auth/AuthContext';
 import { useThemeMode } from '../theme/ThemeModeContext';
+import { api } from '../api/client';
+
+type AuthMode = 'login' | 'signup' | 'forgot';
 
 export default function LoginPage() {
   const { user, loading, login, signup } = useAuth();
   const { mode: themeMode, toggle } = useThemeMode();
-  const [mode, setMode] = useState<'login' | 'signup'>('login');
+  const [mode, setMode] = useState<AuthMode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
 
   if (loading) return null;
   if (user) return <Navigate to="/" replace />;
 
+  const switchMode = (next: AuthMode) => {
+    setMode(next);
+    setError('');
+    setNotice('');
+    setPassword('');
+  };
+
   const submit = async () => {
     setError('');
-    if (!email.trim() || !password) {
+    setNotice('');
+    if (!email.trim()) {
+      setError('Email is required.');
+      return;
+    }
+    if (mode !== 'forgot' && !password) {
       setError('Email and password are required.');
       return;
     }
@@ -40,8 +56,11 @@ export default function LoginPage() {
     try {
       if (mode === 'signup') {
         await signup(email.trim(), password, name.trim() || undefined);
-      } else {
+      } else if (mode === 'login') {
         await login(email.trim(), password);
+      } else {
+        await api.forgotPassword(email.trim());
+        setNotice('If an account exists for that email, a reset link has been sent.');
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong');
@@ -49,6 +68,15 @@ export default function LoginPage() {
       setBusy(false);
     }
   };
+
+  const subtitle =
+    mode === 'login'
+      ? 'Sign in to manage your design reviews.'
+      : mode === 'signup'
+        ? 'Create an account to get started.'
+        : 'Enter your email and we will send you a reset link.';
+
+  const submitLabel = mode === 'login' ? 'Sign in' : mode === 'signup' ? 'Sign up' : 'Send reset link';
 
   return (
     <Box
@@ -74,14 +102,17 @@ export default function LoginPage() {
             UXer
           </Typography>
           <Typography color="text.secondary" sx={{ mb: 3 }}>
-            {mode === 'login'
-              ? 'Sign in to manage your design reviews.'
-              : 'Create an account to get started.'}
+            {subtitle}
           </Typography>
 
           {error && (
             <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
               {error}
+            </Alert>
+          )}
+          {notice && (
+            <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice('')}>
+              {notice}
             </Alert>
           )}
 
@@ -103,38 +134,49 @@ export default function LoginPage() {
               fullWidth
               autoComplete="email"
             />
-            <TextField
-              label="Password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              fullWidth
-              autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') submit();
-              }}
-            />
+            {mode !== 'forgot' && (
+              <TextField
+                label="Password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                fullWidth
+                autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') submit();
+                }}
+              />
+            )}
             <Button variant="contained" size="large" onClick={submit} disabled={busy} fullWidth>
-              {mode === 'login' ? 'Sign in' : 'Sign up'}
+              {submitLabel}
             </Button>
           </Stack>
 
           <Box sx={{ mt: 2, textAlign: 'center' }}>
-            <Typography variant="body2" color="text.secondary">
-              {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
-              <Typography
-                component="span"
-                variant="body2"
-                color="primary.main"
-                sx={{ cursor: 'pointer', fontWeight: 600 }}
-                onClick={() => {
-                  setMode(mode === 'login' ? 'signup' : 'login');
-                  setError('');
-                }}
-              >
-                {mode === 'login' ? 'Sign up' : 'Sign in'}
+            {mode === 'login' && (
+              <Button size="small" onClick={() => switchMode('forgot')}>
+                Forgot password?
+              </Button>
+            )}
+            {mode === 'forgot' && (
+              <Button size="small" onClick={() => switchMode('login')}>
+                Back to sign in
+              </Button>
+            )}
+            {mode !== 'forgot' && (
+              <Typography variant="body2" color="text.secondary">
+                {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
+                <Typography
+                  component="span"
+                  variant="body2"
+                  color="primary.main"
+                  sx={{ cursor: 'pointer', fontWeight: 600 }}
+                  onClick={() => switchMode(mode === 'login' ? 'signup' : 'login')}
+                >
+                  {mode === 'login' ? 'Sign up' : 'Sign in'}
+                </Typography>
               </Typography>
-            </Typography>
+            )}
           </Box>
         </CardContent>
       </Card>
