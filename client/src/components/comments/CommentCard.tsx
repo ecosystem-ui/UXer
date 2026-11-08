@@ -1,4 +1,5 @@
 import { memo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Box, Typography, IconButton, Avatar, Tooltip } from '@mui/material';
 import CheckIcon from '@mui/icons-material/Check';
 import ReplayIcon from '@mui/icons-material/Replay';
@@ -29,15 +30,16 @@ function CommentCard({
   onOpen,
   onToggle,
 }: CommentCardProps) {
+  const { t } = useTranslation();
   const { tokens } = useThemeMode();
   const resolved = comment.status === 'resolved';
-  const name = displayName(comment);
+  const name = displayName(t, comment);
   const replies = comment.replies ?? [];
   const last = replies[replies.length - 1];
   const people = Array.from(
     new Set([
-      comment.author?.name || comment.author?.email || 'Anonymous',
-      ...replies.map((r) => displayName(r)),
+      comment.author?.name || comment.author?.email || t('comments.anonymous'),
+      ...replies.map((r) => displayName(t, r)),
     ]),
   );
 
@@ -83,10 +85,10 @@ function CommentCard({
           {name}
         </Typography>
         <Typography variant="caption" color="text.secondary" noWrap>
-          {timeAgo(comment.created_at)}
+          {timeAgo(t, comment.created_at)}
         </Typography>
         {blockedInfo && (
-          <Tooltip title={blockedHint(blockedInfo)} arrow>
+          <Tooltip title={blockedHint(t, blockedInfo)} arrow>
             <ErrorOutlineIcon sx={{ fontSize: 16, color: '#d97706', flexShrink: 0 }} />
           </Tooltip>
         )}
@@ -98,7 +100,7 @@ function CommentCard({
               e.stopPropagation();
               onToggle();
             }}
-            title={resolved ? 'Reopen' : 'Resolve'}
+            title={resolved ? t('comments.reopen') : t('comments.resolve')}
             sx={{
               ml: 'auto',
               opacity: 0,
@@ -146,12 +148,12 @@ function CommentCard({
         >
           <ErrorOutlineIcon sx={{ fontSize: 14, mt: '1px', color: '#d97706', flexShrink: 0 }} />
           <Typography component="span" variant="caption" sx={{ color: '#92400e' }}>
-            {blockedHint(blockedInfo)}
+            {blockedHint(t, blockedInfo)}
           </Typography>
         </Box>
       )}
 
-      {pageLabel(comment) && (
+      {pageLabel(t, comment) && (
         <Box
           component="span"
           sx={{
@@ -170,7 +172,7 @@ function CommentCard({
         >
           <FormatQuoteIcon sx={{ fontSize: 12 }} />
           <Typography component="span" variant="caption" noWrap sx={{ maxWidth: 260 }}>
-            {pageLabel(comment)}
+            {pageLabel(t, comment)}
           </Typography>
         </Box>
       )}
@@ -210,15 +212,15 @@ function CommentCard({
               ))}
             </Box>
             <Typography variant="caption" fontWeight={600} color={tokens.open} noWrap>
-              {replies.length} {replies.length === 1 ? 'reply' : 'replies'}
+              {t('comments.reply', { count: replies.length })}
             </Typography>
             <Typography variant="caption" noWrap sx={{ flexGrow: 1, minWidth: 0 }}>
-              · {displayName(last)}: {last!.body}
+              · {displayName(t, last)}: {last!.body}
             </Typography>
           </>
         ) : (
           <Typography variant="caption" sx={{ flexGrow: 1 }}>
-            No replies yet
+            {t('comments.noReplies')}
           </Typography>
         )}
         <ChevronRightIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />

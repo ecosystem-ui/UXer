@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import { Navigate, useSearchParams } from 'react-router-dom';
 import {
   Box,
   Button,
@@ -15,13 +16,18 @@ import {
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import { useAuth } from '../auth/AuthContext';
+import { resolveNextPath } from '../auth/redirect';
 import { useThemeMode } from '../theme/ThemeModeContext';
 import { api } from '../api/client';
+import LanguageToggle from '../components/LanguageToggle';
 
 type AuthMode = 'login' | 'signup' | 'forgot';
 
 export default function LoginPage() {
+  const { t } = useTranslation();
   const { user, loading, login, signup } = useAuth();
+  const [searchParams] = useSearchParams();
+  const next = resolveNextPath(searchParams.get('next'));
   const { mode: themeMode, toggle } = useThemeMode();
   const [mode, setMode] = useState<AuthMode>('login');
   const [email, setEmail] = useState('');
@@ -32,7 +38,7 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
 
   if (loading) return null;
-  if (user) return <Navigate to="/" replace />;
+  if (user) return <Navigate to={next} replace />;
 
   const switchMode = (next: AuthMode) => {
     setMode(next);
@@ -45,11 +51,11 @@ export default function LoginPage() {
     setError('');
     setNotice('');
     if (!email.trim()) {
-      setError('Email is required.');
+      setError(t('auth.emailRequired'));
       return;
     }
     if (mode !== 'forgot' && !password) {
-      setError('Email and password are required.');
+      setError(t('auth.emailAndPasswordRequired'));
       return;
     }
     setBusy(true);
@@ -60,10 +66,10 @@ export default function LoginPage() {
         await login(email.trim(), password);
       } else {
         await api.forgotPassword(email.trim());
-        setNotice('If an account exists for that email, a reset link has been sent.');
+        setNotice(t('auth.forgotNotice'));
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong');
+      setError(e instanceof Error ? e.message : t('auth.somethingWentWrong'));
     } finally {
       setBusy(false);
     }
@@ -71,12 +77,17 @@ export default function LoginPage() {
 
   const subtitle =
     mode === 'login'
-      ? 'Sign in to manage your design reviews.'
+      ? t('auth.loginSubtitle')
       : mode === 'signup'
-        ? 'Create an account to get started.'
-        : 'Enter your email and we will send you a reset link.';
+        ? t('auth.signupSubtitle')
+        : t('auth.forgotSubtitle');
 
-  const submitLabel = mode === 'login' ? 'Sign in' : mode === 'signup' ? 'Sign up' : 'Send reset link';
+  const submitLabel =
+    mode === 'login'
+      ? t('auth.signIn')
+      : mode === 'signup'
+        ? t('auth.signUp')
+        : t('auth.sendResetLink');
 
   return (
     <Box
@@ -87,15 +98,16 @@ export default function LoginPage() {
       bgcolor="background.default"
       sx={{ position: 'relative' }}
     >
-      <Tooltip title={themeMode === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}>
-        <IconButton
-          onClick={toggle}
-          aria-label="Toggle color theme"
-          sx={{ position: 'absolute', top: 16, right: 16 }}
+      <Box sx={{ position: 'absolute', top: 16, right: 16, display: 'flex', gap: 1 }}>
+        <LanguageToggle />
+        <Tooltip
+          title={themeMode === 'dark' ? t('layout.switchToLight') : t('layout.switchToDark')}
         >
-          {themeMode === 'dark' ? <LightModeIcon /> : <DarkModeIcon />}
-        </IconButton>
-      </Tooltip>
+          <IconButton onClick={toggle} aria-label={t('layout.toggleColorTheme')}>
+            {themeMode === 'dark' ? <LightModeIcon /> : <DarkModeIcon />}
+          </IconButton>
+        </Tooltip>
+      </Box>
       <Card sx={{ width: 400 }} elevation={2}>
         <CardContent sx={{ p: 4 }}>
           <Typography variant="h4" fontWeight={700} color="primary.main" gutterBottom>
@@ -119,7 +131,7 @@ export default function LoginPage() {
           <Stack spacing={2}>
             {mode === 'signup' && (
               <TextField
-                label="Name"
+                label={t('auth.name')}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 fullWidth
@@ -127,7 +139,7 @@ export default function LoginPage() {
               />
             )}
             <TextField
-              label="Email"
+              label={t('auth.email')}
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -136,7 +148,7 @@ export default function LoginPage() {
             />
             {mode !== 'forgot' && (
               <TextField
-                label="Password"
+                label={t('auth.password')}
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -155,17 +167,17 @@ export default function LoginPage() {
           <Box sx={{ mt: 2, textAlign: 'center' }}>
             {mode === 'login' && (
               <Button size="small" onClick={() => switchMode('forgot')}>
-                Forgot password?
+                {t('auth.forgotPassword')}
               </Button>
             )}
             {mode === 'forgot' && (
               <Button size="small" onClick={() => switchMode('login')}>
-                Back to sign in
+                {t('auth.backToSignIn')}
               </Button>
             )}
             {mode !== 'forgot' && (
               <Typography variant="body2" color="text.secondary">
-                {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
+                {mode === 'login' ? t('auth.dontHaveAccount') : t('auth.alreadyHaveAccount')}
                 <Typography
                   component="span"
                   variant="body2"
@@ -173,7 +185,7 @@ export default function LoginPage() {
                   sx={{ cursor: 'pointer', fontWeight: 600 }}
                   onClick={() => switchMode(mode === 'login' ? 'signup' : 'login')}
                 >
-                  {mode === 'login' ? 'Sign up' : 'Sign in'}
+                  {mode === 'login' ? t('auth.signUp') : t('auth.signIn')}
                 </Typography>
               </Typography>
             )}

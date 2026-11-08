@@ -31,6 +31,8 @@ export default defineConfig({
       UXER_STATIC_DIR: '../client/dist',
       SESSION_SECRET: 'e2e-test-secret-0123456789abcdef0123456789abcdef',
       ALLOW_PRIVATE_HOSTS: 'localhost,127.0.0.1',
+      // The suite signs up many users from one IP; keep the limiter out of the way.
+      UXER_AUTH_RATE_LIMIT: '500',
     },
   },
 });

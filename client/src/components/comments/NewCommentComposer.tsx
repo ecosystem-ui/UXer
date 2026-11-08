@@ -1,7 +1,9 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Box, Typography, Button, TextField } from '@mui/material';
 import FormatQuoteIcon from '@mui/icons-material/FormatQuote';
 import { useThemeMode } from '../../theme/ThemeModeContext';
+import { MAX_MESSAGE_LENGTH } from './types';
 
 export interface NewCommentComposerProps {
   excerpt: string;
@@ -14,6 +16,7 @@ export default function NewCommentComposer({
   onCancel,
   onSubmit,
 }: NewCommentComposerProps) {
+  const { t } = useTranslation();
   const { tokens } = useThemeMode();
   const [text, setText] = useState('');
   return (
@@ -29,7 +32,7 @@ export default function NewCommentComposer({
       }}
     >
       <Typography variant="caption" fontWeight={600} color={tokens.open}>
-        New comment
+        {t('comments.newComment')}
       </Typography>
       {excerpt && (
         <Box
@@ -61,8 +64,9 @@ export default function NewCommentComposer({
         minRows={3}
         fullWidth
         size="small"
-        placeholder="Write a comment…"
+        placeholder={t('comments.writeComment')}
         value={text}
+        inputProps={{ maxLength: MAX_MESSAGE_LENGTH }}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && text.trim()) onSubmit(text.trim());
@@ -75,7 +79,7 @@ export default function NewCommentComposer({
           onClick={onCancel}
           sx={{ color: 'text.primary', '&:hover': { bgcolor: 'background.paper' } }}
         >
-          Cancel
+          {t('common.cancel')}
         </Button>
         <Button
           size="small"
@@ -83,7 +87,7 @@ export default function NewCommentComposer({
           disabled={!text.trim()}
           onClick={() => onSubmit(text.trim())}
         >
-          Comment
+          {t('comments.comment')}
         </Button>
       </Box>
     </Box>

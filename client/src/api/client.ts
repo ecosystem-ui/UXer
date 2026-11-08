@@ -68,8 +68,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email }),
     }),
-  removeMember: (projectId: string, userId: string) =>
-    request<{ ok: boolean }>(`/projects/${projectId}/members/${userId}`, { method: 'DELETE' }),
+  removeMember: (projectId: string, email: string) =>
+    request<{ ok: boolean }>(`/projects/${projectId}/members/${encodeURIComponent(email)}`, {
+      method: 'DELETE',
+    }),
 
   listVersions: (projectId: string) => request<Version[]>(`/projects/${projectId}/versions`),
   createVersion: (projectId: string, label: string, url: string) =>

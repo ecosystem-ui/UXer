@@ -35,11 +35,13 @@ type Project struct {
 }
 
 type ProjectMember struct {
-	UserID    string `json:"user_id"`
 	Email     string `json:"email"`
 	Name      string `json:"name"`
 	Role      string `json:"role"`
 	CreatedAt string `json:"created_at"`
+	// Pending is true when no account exists for Email yet. The membership
+	// still grants access as soon as someone signs up with that address.
+	Pending bool `json:"pending"`
 }
 
 type Version struct {

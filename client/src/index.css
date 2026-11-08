@@ -4,6 +4,22 @@ body,
   height: 100%;
 }
 
+.projects-list {
+  max-height: calc(100vh - 190px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 2px;
+}
+
+.personas-list {
+  max-height: calc(100vh - 255px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 0px 16px 42px 2px;
+}
+
 .projects-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -138,9 +154,21 @@ body,
   to { background-position: 0 100%; }
 }
 
+.uxer-logo {
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: #0e2a2e;
+  background: linear-gradient(160deg, #f0c85b, #6ed6bd, #ef847d, #f0c85b);
+  background-size: 100% 300%;
+  animation: project-card-border-roll 7s linear infinite;
+  box-shadow: 0 3px 10px rgba(9, 30, 34, 0.16);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .project-card::before,
-  .project-card {
+  .project-card,
+  .uxer-logo {
     animation: none;
     transition: none;
   }

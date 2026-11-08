@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -12,6 +13,7 @@ import {
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AddCommentIcon from '@mui/icons-material/AddComment';
+import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import SearchIcon from '@mui/icons-material/Search';
 import CloseIcon from '@mui/icons-material/Close';
 import { api } from '../api/client';
@@ -19,6 +21,7 @@ import type { Version, Comment, CommentStatus } from '../api/types';
 import type { Anchor, Pin } from '../bridge-protocol';
 import { sendToBridge } from '../bridge-protocol';
 import { useThemeMode } from '../theme/ThemeModeContext';
+import ShareProjectDialog from '../components/ShareProjectDialog';
 import {
   CommentCard,
   ThreadDetail,
@@ -32,6 +35,7 @@ import {
 } from '../components/comments';
 
 export default function PreviewPage() {
+  const { t } = useTranslation();
   const { projectId, versionId } = useParams<{ projectId: string; versionId: string }>();
   const navigate = useNavigate();
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -48,23 +52,27 @@ export default function PreviewPage() {
   const [detailId, setDetailId] = useState<string | null>(null);
   const [currentUrl, setCurrentUrl] = useState('');
   const [role, setRole] = useState<'owner' | 'viewer'>('viewer');
+  const [shareOpen, setShareOpen] = useState(false);
   const [blocked, setBlocked] = useState<Record<string, BlockedInfo>>({});
-  const [guide, setGuide] = useState<string | null>(null);
+  const [guide, setGuide] = useState<BlockedInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const pinsRef = useRef<Pin[]>([]);
 
-  const reload = async (id: string) => {
-    try {
-      const cs = await api.listComments(id);
-      setComments(cs);
-      setLoadFailed(false);
-    } catch (e) {
-      setComments([]);
-      setLoadFailed(true);
-      setError(e instanceof Error ? e.message : 'Failed to load comments');
-    }
-  };
+  const reload = useCallback(
+    async (id: string) => {
+      try {
+        const cs = await api.listComments(id);
+        setComments(cs);
+        setLoadFailed(false);
+      } catch (e) {
+        setComments([]);
+        setLoadFailed(true);
+        setError(e instanceof Error ? e.message : t('preview.loadCommentsFailed'));
+      }
+    },
+    [t],
+  );
 
   // Load version metadata and the current user's project role.
   useEffect(() => {
@@ -86,7 +94,7 @@ export default function PreviewPage() {
   // Load comments.
   useEffect(() => {
     if (versionId) reload(versionId);
-  }, [versionId]);
+  }, [versionId, reload]);
 
   // Listen for bridge messages (element anchor captures, navigation, ready).
   useEffect(() => {
@@ -100,7 +108,7 @@ export default function PreviewPage() {
           originHost === window.location.hostname ||
           originHost.endsWith('.' + window.location.hostname);
       } catch {
-        sameHost = false;
+        // Invalid origin — leave sameHost false.
       }
       if (!sameHost) return;
       const d = e.data;
@@ -128,7 +136,7 @@ export default function PreviewPage() {
             reason: typeof d.reason === 'string' ? d.reason : undefined,
           };
           setBlocked((b) => ({ ...b, [id]: info }));
-          setGuide(blockedHint(info));
+          setGuide(info);
         }
       } else if (d.type === 'step-reached') {
         const id = typeof d.id === 'string' ? d.id : null;
@@ -271,7 +279,7 @@ export default function PreviewPage() {
       setFilter((f) => (f === 'resolved' ? 'open' : f));
       setActiveId(created.id);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to post comment');
+      setError(e instanceof Error ? e.message : t('preview.postCommentFailed'));
     }
   };
 
@@ -280,7 +288,7 @@ export default function PreviewPage() {
       await api.updateComment(c.id, { status, resolved_version_id: versionId });
       await reload(versionId!);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to update comment');
+      setError(e instanceof Error ? e.message : t('preview.updateCommentFailed'));
     }
   };
 
@@ -289,7 +297,7 @@ export default function PreviewPage() {
       await api.createReply(c.id, body);
       await reload(versionId!);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to post reply');
+      setError(e instanceof Error ? e.message : t('preview.postReplyFailed'));
     }
   };
 
@@ -299,7 +307,7 @@ export default function PreviewPage() {
       setDetailId(null);
       await reload(versionId!);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to delete comment');
+      setError(e instanceof Error ? e.message : t('preview.deleteCommentFailed'));
     }
   };
 
@@ -369,17 +377,17 @@ export default function PreviewPage() {
   }
 
   const emptyTitle = query
-    ? 'No matching comments'
+    ? t('preview.emptySearchTitle')
     : loadFailed
-      ? "Couldn't load comments"
+      ? t('preview.emptyLoadFailedTitle')
       : filter === 'open'
-        ? 'All caught up'
-        : 'No comments here';
+        ? t('preview.emptyOpenTitle')
+        : t('preview.emptyResolvedTitle');
   const emptySubtitle = query
-    ? 'Try a different search.'
+    ? t('preview.emptySearchSubtitle')
     : loadFailed
-      ? 'Check your connection and try again.'
-      : 'Turn on comment mode and click the page to leave feedback.';
+      ? t('preview.emptyLoadFailedSubtitle')
+      : t('preview.emptyDefaultSubtitle');
 
   return (
     <Box
@@ -408,7 +416,7 @@ export default function PreviewPage() {
         <IconButton
           size="small"
           onClick={() => navigate(`/projects/${projectId}`)}
-          aria-label="Back to versions"
+          aria-label={t('preview.backToVersions')}
         >
           <ArrowBackIcon fontSize="small" />
         </IconButton>
@@ -424,6 +432,17 @@ export default function PreviewPage() {
           {version.url}
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          {role === 'owner' && (
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<PersonAddIcon sx={{ fontSize: 16 }} />}
+              onClick={() => setShareOpen(true)}
+              sx={{ minHeight: 34, px: 1.4, borderWidth: 2, fontSize: 14, whiteSpace: 'nowrap' }}
+            >
+              {t('common.share')}
+            </Button>
+          )}
           <Box
             component="span"
             sx={{
@@ -436,12 +455,9 @@ export default function PreviewPage() {
               fontWeight: 500,
             }}
           >
-            {openCount} open
+            {t('preview.openBadge', { count: openCount })}
           </Box>
-          <Tooltip
-            title={detail !== null ? "Exit back from the comment's thread" : ''}
-            placement="bottom"
-          >
+          <Tooltip title={detail !== null ? t('preview.exitThreadTooltip') : ''} placement="bottom">
             <Box component="span" sx={{ display: 'inline-flex' }}>
               <Button
                 size="small"
@@ -468,7 +484,7 @@ export default function PreviewPage() {
                   },
                 }}
               >
-                {commentMode ? 'Click page to comment' : 'Comment mode'}
+                {commentMode ? t('preview.clickToComment') : t('preview.commentMode')}
               </Button>
             </Box>
           </Tooltip>
@@ -496,7 +512,7 @@ export default function PreviewPage() {
             ref={iframeRef}
             src={`/proxy?url=${encodeURIComponent(version.url)}`}
             style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
-            title="design preview"
+            title={t('preview.designPreviewTitle')}
           />
         </Box>
 
@@ -544,7 +560,7 @@ export default function PreviewPage() {
               >
                 <Box display="flex" alignItems="center" justifyContent="space-between">
                   <Typography variant="subtitle1" fontWeight={600}>
-                    Comments
+                    {t('preview.comments')}
                   </Typography>
                   <Box
                     component="select"
@@ -560,8 +576,8 @@ export default function PreviewPage() {
                       '&:hover': { color: 'text.primary' },
                     }}
                   >
-                    <option value="newest">Newest first</option>
-                    <option value="oldest">Oldest first</option>
+                    <option value="newest">{t('preview.newestFirst')}</option>
+                    <option value="oldest">{t('preview.oldestFirst')}</option>
                   </Box>
                 </Box>
 
@@ -589,7 +605,7 @@ export default function PreviewPage() {
                     component="input"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Search comments"
+                    placeholder={t('preview.searchComments')}
                     sx={{
                       width: '100%',
                       border: 'none',
@@ -601,7 +617,11 @@ export default function PreviewPage() {
                     }}
                   />
                   {query && (
-                    <IconButton size="small" onClick={() => setQuery('')} aria-label="Clear search">
+                    <IconButton
+                      size="small"
+                      onClick={() => setQuery('')}
+                      aria-label={t('preview.clearSearch')}
+                    >
                       <CloseIcon sx={{ fontSize: 14 }} />
                     </IconButton>
                   )}
@@ -683,9 +703,17 @@ export default function PreviewPage() {
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >
         <Alert onClose={() => setGuide(null)} severity="warning" variant="filled">
-          {guide}
+          {guide && blockedHint(t, guide)}
         </Alert>
       </Snackbar>
+
+      {projectId && (
+        <ShareProjectDialog
+          open={shareOpen}
+          projectId={projectId}
+          onClose={() => setShareOpen(false)}
+        />
+      )}
     </Box>
   );
 }

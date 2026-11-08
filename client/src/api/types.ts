@@ -16,11 +16,13 @@ export interface Project {
 }
 
 export interface ProjectMember {
-  user_id: string;
+  /** Normalized email that owns this membership (key). */
   email: string;
   name: string;
   role: string;
   created_at: string;
+  /** True when no account exists for this email yet; access starts at signup. */
+  pending: boolean;
 }
 
 export interface Version {

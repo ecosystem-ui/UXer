@@ -6,6 +6,10 @@ export const OSAC_URL = 'https://osac-project.github.io/osac-ux/';
 // specs (same-origin subviews that don't change the URL).
 export const VMAS_URL = 'https://osac-project.github.io/osac-ux/vmaas-ux-prototype.html';
 
+// The tenant BMAAS prototype: its Bare metal workspace renders instances as a
+// card grid or a table, so the same content has two different DOM layouts.
+export const BMAAS_URL = 'https://heyethankim.github.io/osac-bmaas/';
+
 export interface TestUser {
   name: string;
   email: string;
@@ -62,11 +66,15 @@ export async function createPersona(page: Page, label: string, url: string): Pro
   await page.getByText(label, { exact: true }).waitFor();
 }
 
-export async function shareProject(page: Page, email: string): Promise<void> {
+export async function shareProject(
+  page: Page,
+  email: string,
+  status: 'viewer' | 'invited' = 'viewer',
+): Promise<void> {
   await page.getByRole('button', { name: 'Share' }).click();
   await page.getByLabel('Email address').fill(email);
   await page.getByRole('button', { name: 'Add', exact: true }).click();
-  await page.getByText(`${email} · viewer`).waitFor();
+  await page.getByText(`${email} · ${status}`).waitFor();
   await page.getByRole('button', { name: 'Done' }).click();
 }
 

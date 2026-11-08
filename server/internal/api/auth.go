@@ -16,6 +16,10 @@ import (
 // resetTokenTTL is how long a password-reset token stays valid.
 const resetTokenTTL = time.Hour
 
+// maxPasswordBytes mirrors bcrypt's 72-byte input limit. Longer passwords are
+// rejected with a clear client error instead of surfacing a hashing failure.
+const maxPasswordBytes = 72
+
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	uid, err := s.Auth.GetUserID(r)
 	if err != nil {
@@ -56,9 +60,13 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "password must be at least 6 characters")
 		return
 	}
+	if len(body.Password) > maxPasswordBytes {
+		writeError(w, http.StatusBadRequest, "password must be 72 characters or fewer")
+		return
+	}
 	name := strings.TrimSpace(body.Name)
 	if name == "" {
-		name = email // fall back to the email local part for display
+		name = email // fall back to the email address for display
 	}
 
 	var exists int
@@ -183,6 +191,10 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(body.Password) < 6 {
 		writeError(w, http.StatusBadRequest, "password must be at least 6 characters")
+		return
+	}
+	if len(body.Password) > maxPasswordBytes {
+		writeError(w, http.StatusBadRequest, "password must be 72 characters or fewer")
 		return
 	}
 	token := strings.TrimSpace(body.Token)

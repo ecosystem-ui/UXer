@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Box, Typography, IconButton, Button, Avatar, TextField, Tooltip } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckIcon from '@mui/icons-material/Check';
@@ -11,7 +12,7 @@ import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import type { Comment } from '../../api/types';
 import { useThemeMode } from '../../theme/ThemeModeContext';
 import { displayName, timeAgo, pageLabel, blockedHint, userColor } from './utils';
-import type { BlockedInfo } from './types';
+import { MAX_MESSAGE_LENGTH, type BlockedInfo } from './types';
 import ReplyRow from './ReplyRow';
 
 export interface ThreadDetailProps {
@@ -37,9 +38,10 @@ export default function ThreadDetail({
   onToggle,
   onDelete,
 }: ThreadDetailProps) {
-  const { tokens } = useThemeMode();
+  const { t } = useTranslation();
+  const { mode, tokens } = useThemeMode();
   const resolved = comment.status === 'resolved';
-  const name = displayName(comment);
+  const name = displayName(t, comment);
   const replies = comment.replies ?? [];
   const [reply, setReply] = useState('');
   const [confirm, setConfirm] = useState(false);
@@ -71,22 +73,25 @@ export default function ThreadDetail({
           borderColor: 'divider',
         }}
       >
-        <IconButton size="small" onClick={onBack} aria-label="Back to all comments">
+        <IconButton size="small" onClick={onBack} aria-label={t('comments.backToAllComments')}>
           <ArrowBackIcon fontSize="small" />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
             <Typography variant="body2" fontWeight={600}>
-              Thread #{index}
+              {t('comments.thread', { index })}
             </Typography>
             {blockedInfo && (
-              <Tooltip title={blockedHint(blockedInfo)} arrow>
+              <Tooltip title={blockedHint(t, blockedInfo)} arrow>
                 <ErrorOutlineIcon sx={{ fontSize: 16, color: '#d97706' }} />
               </Tooltip>
             )}
           </Box>
           <Typography variant="caption" color="text.secondary">
-            {replies.length + 1} messages · {resolved ? 'Resolved' : 'Open'}
+            {t('comments.messagesSummary', {
+              count: replies.length + 1,
+              status: resolved ? t('comments.statusResolved') : t('comments.statusOpen'),
+            })}
           </Typography>
         </Box>
         {(canResolve || canManage) && (
@@ -116,7 +121,7 @@ export default function ThreadDetail({
                   },
                 }}
               >
-                {resolved ? 'Reopen' : 'Resolve'}
+                {resolved ? t('comments.reopen') : t('comments.resolve')}
               </Button>
             )}
             {canManage && (
@@ -124,7 +129,7 @@ export default function ThreadDetail({
                 size="small"
                 onClick={() => (confirm ? onDelete() : setConfirm(true))}
                 onBlur={() => setConfirm(false)}
-                title="Delete thread"
+                title={t('comments.deleteThread')}
                 sx={{
                   color: confirm ? 'error.contrastText' : 'text.secondary',
                   bgcolor: confirm ? 'error.main' : 'transparent',
@@ -136,7 +141,7 @@ export default function ThreadDetail({
               >
                 {confirm ? (
                   <Typography variant="caption" sx={{ px: 0.5, fontWeight: 500 }}>
-                    Delete?
+                    {t('comments.deleteConfirm')}
                   </Typography>
                 ) : (
                   <DeleteOutlineIcon fontSize="small" />
@@ -168,7 +173,7 @@ export default function ThreadDetail({
         >
           <ErrorOutlineIcon sx={{ fontSize: 18, mt: '1px', color: '#d97706', flexShrink: 0 }} />
           <Typography variant="caption" sx={{ color: '#92400e' }}>
-            {blockedHint(blockedInfo)}
+            {blockedHint(t, blockedInfo)}
           </Typography>
         </Box>
       )}
@@ -176,7 +181,12 @@ export default function ThreadDetail({
       {/* Messages */}
       <Box sx={{ flexGrow: 1, overflowY: 'auto', bgcolor: tokens.canvas, p: 1.5 }}>
         <Box
-          sx={{ borderRadius: 2, border: 1, borderColor: tokens.surfaceBorder, bgcolor: tokens.surface }}
+          sx={{
+            borderRadius: 2,
+            border: 1,
+            borderColor: tokens.surfaceBorder,
+            bgcolor: tokens.surface,
+          }}
         >
           <Box
             component="button"
@@ -207,11 +217,15 @@ export default function ThreadDetail({
             </Avatar>
             <Box sx={{ flexGrow: 1, minWidth: 0 }}>
               <Box display="flex" alignItems="center" gap={1}>
-                <Typography variant="body2" fontWeight={600}>
+                <Typography
+                  variant="body2"
+                  fontWeight={600}
+                  sx={{ color: mode === 'dark' ? '#fff' : 'text.primary' }}
+                >
                   {name}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  {timeAgo(comment.created_at)}
+                  {timeAgo(t, comment.created_at)}
                 </Typography>
               </Box>
               {!showOriginal && (
@@ -232,7 +246,7 @@ export default function ThreadDetail({
           {showOriginal && (
             <Box sx={{ mt: -0.5, px: 1.5, pb: 1.5, pl: '3.25rem' }}>
               <Typography variant="body2">{comment.body}</Typography>
-              {pageLabel(comment) && (
+              {pageLabel(t, comment) && (
                 <Box
                   component="span"
                   sx={{
@@ -248,7 +262,7 @@ export default function ThreadDetail({
                     color: 'text.secondary',
                   }}
                 >
-                  <FormatQuoteIcon sx={{ fontSize: 12 }} /> {pageLabel(comment)}
+                  <FormatQuoteIcon sx={{ fontSize: 12 }} /> {pageLabel(t, comment)}
                 </Box>
               )}
             </Box>
@@ -261,7 +275,7 @@ export default function ThreadDetail({
             color="text.secondary"
             sx={{ display: 'block', textAlign: 'center', py: 4 }}
           >
-            No replies yet. Start the discussion below.
+            {t('comments.noRepliesYet')}
           </Typography>
         ) : (
           <Box
@@ -299,7 +313,7 @@ export default function ThreadDetail({
             color="text.secondary"
             sx={{ display: 'block', textAlign: 'center' }}
           >
-            This thread is resolved. Reopen it to continue the discussion.
+            {t('comments.threadResolved')}
           </Typography>
         ) : (
           <Box display="flex" alignItems="flex-end" gap={1}>
@@ -310,6 +324,7 @@ export default function ThreadDetail({
               fullWidth
               size="small"
               value={reply}
+              inputProps={{ maxLength: MAX_MESSAGE_LENGTH }}
               onChange={(e) => setReply(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -318,12 +333,12 @@ export default function ThreadDetail({
                 }
                 if (e.key === 'Escape') onBack();
               }}
-              placeholder="Reply to thread… (Shift+Enter for new line)"
+              placeholder={t('comments.replyPlaceholder')}
             />
             <IconButton
               onClick={send}
               disabled={!reply.trim()}
-              aria-label="Send reply"
+              aria-label={t('comments.sendReply')}
               sx={{
                 bgcolor: tokens.ink,
                 color: '#fff',

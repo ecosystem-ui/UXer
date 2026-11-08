@@ -1,24 +1,25 @@
+import type { TFunction } from 'i18next';
 import type { Comment } from '../../api/types';
 import type { BlockedInfo } from './types';
 
-export function timeAgo(iso: string): string {
+export function timeAgo(t: TFunction, iso: string): string {
   const then = new Date(iso).getTime();
   const secs = Math.round((Date.now() - then) / 1000);
   if (Number.isNaN(secs) || secs < 0) return '';
-  if (secs < 60) return 'just now';
+  if (secs < 60) return t('comments.timeAgo.justNow');
   const mins = Math.round(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 60) return t('comments.timeAgo.minutesAgo', { n: mins });
   const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
+  if (hrs < 24) return t('comments.timeAgo.hoursAgo', { n: hrs });
   const days = Math.round(hrs / 24);
-  if (days < 7) return `${days}d ago`;
+  if (days < 7) return t('comments.timeAgo.daysAgo', { n: days });
   return new Date(iso).toLocaleDateString();
 }
 
 export type Authorish = { author?: { name: string; email: string } | null };
 
-export function displayName(a: Authorish | null | undefined): string {
-  return a?.author?.name || a?.author?.email || 'Anonymous';
+export function displayName(t: TFunction, a: Authorish | null | undefined): string {
+  return a?.author?.name || a?.author?.email || t('comments.anonymous');
 }
 
 // Distinct avatar colors, assigned deterministically per user so the same
@@ -80,15 +81,15 @@ export function pageName(pageUrl: string): string {
 
 // Format a comment's page label as "[page name] page" (e.g. "security groups
 // page"), or '' when no page is recorded.
-export function pageLabel(c: Comment): string {
+export function pageLabel(t: TFunction, c: Comment): string {
   const name = pageName(c.page_url);
-  return name ? `${name} page` : '';
+  return name ? t('comments.pageLabel', { name }) : '';
 }
 
-export function blockedHint(info: BlockedInfo): string {
-  const label = info.stepLabel?.trim() || 'that step';
+export function blockedHint(t: TFunction, info: BlockedInfo): string {
+  const label = info.stepLabel?.trim() || t('comments.thatStep');
   if (info.reason === 'wizard-not-open') {
-    return `This comment is inside the creation wizard. Open the wizard and go to the “${label}” step — the pin will appear there.`;
+    return t('comments.blockedHintWizardNotOpen', { label });
   }
-  return `The wizard can't reach “${label}” automatically — a required field is missing or invalid. Click through the wizard (filling in required fields) to the “${label}” step and the pin will appear there.`;
+  return t('comments.blockedHintMissingFields', { label });
 }

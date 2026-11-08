@@ -1,4 +1,5 @@
 import { Box } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import { useThemeMode } from '../../theme/ThemeModeContext';
 import type { Filter } from './types';
 
@@ -9,6 +10,7 @@ export interface FilterSegProps {
 }
 
 export default function FilterSeg({ value, onChange, counts }: FilterSegProps) {
+  const { t } = useTranslation();
   const { tokens } = useThemeMode();
   const items: Filter[] = ['open', 'resolved', 'all'];
   return (
@@ -43,7 +45,7 @@ export default function FilterSeg({ value, onChange, counts }: FilterSegProps) {
             '&:hover': value !== f ? { color: tokens.foreground } : {},
           }}
         >
-          {f}{' '}
+          {t(`filters.${f}`)}{' '}
           <Box component="span" sx={{ fontSize: 12, opacity: 0.7 }}>
             {counts[f]}
           </Box>

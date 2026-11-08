@@ -9,15 +9,16 @@ import (
 
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r)
+	email := normalizeEmail(u.Email)
 	rows, err := s.DB.SQL.Query(
 		`SELECT p.id, p.name, p.owner_id, ou.name, p.created_at, p.updated_at,
 		        CASE WHEN p.owner_id = ? THEN 'owner' ELSE COALESCE(m.role, 'viewer') END AS role
 		 FROM projects p
 		 JOIN users ou ON ou.id = p.owner_id
-		 LEFT JOIN project_members m ON m.project_id = p.id AND m.user_id = ?
-		 WHERE p.owner_id = ? OR m.user_id = ?
+		 LEFT JOIN project_members m ON m.project_id = p.id AND m.email = ?
+		 WHERE p.owner_id = ? OR m.email = ?
 		 ORDER BY p.updated_at DESC`,
-		u.ID, u.ID, u.ID, u.ID,
+		u.ID, email, u.ID, email,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
@@ -131,6 +132,7 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleListMembers lists the non-owner members (viewers) of a project.
+// Memberships are keyed by email, so a member may not have signed up yet.
 // Owner-only: only the project owner may manage sharing.
 func (s *Server) handleListMembers(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
@@ -139,8 +141,9 @@ func (s *Server) handleListMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.DB.SQL.Query(
-		`SELECT m.user_id, u.email, u.name, m.role, m.created_at
-		 FROM project_members m JOIN users u ON u.id = m.user_id
+		`SELECT m.email, COALESCE(u.name, ''), m.role, m.created_at,
+		        CASE WHEN u.id IS NULL THEN 1 ELSE 0 END AS pending
+		 FROM project_members m LEFT JOIN users u ON lower(u.email) = m.email
 		 WHERE m.project_id = ? ORDER BY m.created_at ASC`, projectID,
 	)
 	if err != nil {
@@ -152,7 +155,7 @@ func (s *Server) handleListMembers(w http.ResponseWriter, r *http.Request) {
 	members := []db.ProjectMember{}
 	for rows.Next() {
 		var m db.ProjectMember
-		if err := rows.Scan(&m.UserID, &m.Email, &m.Name, &m.Role, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.Email, &m.Name, &m.Role, &m.CreatedAt, &m.Pending); err != nil {
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}
@@ -165,12 +168,12 @@ func (s *Server) handleListMembers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, members)
 }
 
-// handleAddMember shares a project with an existing user (by email) as a
-// viewer. Owner-only.
+// handleAddMember shares a project with an email address as a viewer. The
+// address does not need to belong to an account: the membership is stored by
+// email and takes effect automatically when that person signs up. Owner-only.
 func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
-	ownerID, ok := s.ownedProject(r, projectID)
-	if !ok {
+	if _, ok := s.ownedProject(r, projectID); !ok {
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
@@ -182,47 +185,59 @@ func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	email := strings.ToLower(strings.TrimSpace(body.Email))
+	email := normalizeEmail(body.Email)
 	if email == "" {
 		writeError(w, http.StatusBadRequest, "email is required")
 		return
 	}
-
-	var userID, name string
-	err := s.DB.SQL.QueryRow(`SELECT id, name FROM users WHERE email = ?`, email).Scan(&userID, &name)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "no user with that email")
+	if !validEmail(email) {
+		writeError(w, http.StatusBadRequest, "a valid email is required")
 		return
 	}
-	if userID == ownerID {
+	if email == normalizeEmail(userFrom(r).Email) {
 		writeError(w, http.StatusBadRequest, "owner is already a member")
 		return
 	}
 
+	// Include the display name when an account already exists. A missing
+	// account is not an error — the invite is pending until signup.
+	var name string
+	pending := true
+	if err := s.DB.SQL.QueryRow(
+		`SELECT name FROM users WHERE lower(email) = ?`, email,
+	).Scan(&name); err == nil {
+		pending = false
+	}
+
 	ts := now()
 	if _, err := s.DB.SQL.Exec(
-		`INSERT INTO project_members (project_id, user_id, role, created_at) VALUES (?, ?, 'viewer', ?)
-		 ON CONFLICT(project_id, user_id) DO UPDATE SET role = excluded.role`,
-		projectID, userID, ts,
+		`INSERT INTO project_members (project_id, email, role, created_at) VALUES (?, ?, 'viewer', ?)
+		 ON CONFLICT(project_id, email) DO UPDATE SET role = excluded.role`,
+		projectID, email, ts,
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, "add member failed")
 		return
 	}
 	writeJSON(w, http.StatusCreated, db.ProjectMember{
-		UserID: userID, Email: email, Name: name, Role: "viewer", CreatedAt: ts,
+		Email: email, Name: name, Role: "viewer", CreatedAt: ts, Pending: pending,
 	})
 }
 
-// handleRemoveMember revokes a member's access to a project. Owner-only.
+// handleRemoveMember revokes a member's access to a project by email, which
+// also works for invitations that have not been accepted yet. Owner-only.
 func (s *Server) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
-	userID := r.PathValue("userId")
+	email := normalizeEmail(r.PathValue("email"))
 	if _, ok := s.ownedProject(r, projectID); !ok {
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
+	if email == "" {
+		writeError(w, http.StatusBadRequest, "email is required")
+		return
+	}
 	if _, err := s.DB.SQL.Exec(
-		`DELETE FROM project_members WHERE project_id = ? AND user_id = ?`, projectID, userID,
+		`DELETE FROM project_members WHERE project_id = ? AND email = ?`, projectID, email,
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, "remove member failed")
 		return

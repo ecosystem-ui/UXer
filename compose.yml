@@ -1,0 +1,36 @@
+services:
+  uxer:
+    build:
+      context: .
+      containerfile: Containerfile
+    image: uxer:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - uxer-data:/app/data
+    environment:
+      UXER_PORT: "8080"
+      UXER_DB_PATH: data/uxer.db
+      UXER_STATIC_DIR: client/dist
+      UXER_ENV: production
+      # Set a strong random secret: openssl rand -hex 32
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+      UXER_APP_URL: ${UXER_APP_URL:-http://localhost:8080}
+      UXER_SECURE_COOKIE: ${UXER_SECURE_COOKIE:-0}
+      ALLOW_PRIVATE_HOSTS: ${ALLOW_PRIVATE_HOSTS:-localhost,127.0.0.1}
+      UXER_AUTH_RATE_LIMIT: ${UXER_AUTH_RATE_LIMIT:-20}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  uxer-data:

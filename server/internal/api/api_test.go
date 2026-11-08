@@ -396,3 +396,142 @@ func TestForgotAndResetPassword(t *testing.T) {
 		t.Fatalf("expected no email for unknown account, got to=%q url=%q", fm.lastTo, fm.lastResetURL)
 	}
 }
+
+// Inviting an address with no account stores a pending membership that grants
+// viewer access automatically when that person signs up.
+func TestInviteNonUserThenSignupGrantsAccess(t *testing.T) {
+	_, h, ownerCookie := newTestServer(t)
+
+	rec := do(h, ownerCookie, http.MethodPost, "/api/projects", `{"name":"Invite only"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create project: %d %s", rec.Code, rec.Body.String())
+	}
+	var project db.Project
+	_ = json.Unmarshal(rec.Body.Bytes(), &project)
+
+	// Invite an address that has no account yet (casing is normalized).
+	rec = do(h, ownerCookie, http.MethodPost, "/api/projects/"+project.ID+"/members",
+		`{"email":"Future@Example.com"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("invite non-user: %d %s", rec.Code, rec.Body.String())
+	}
+	var member db.ProjectMember
+	_ = json.Unmarshal(rec.Body.Bytes(), &member)
+	if member.Email != "future@example.com" || !member.Pending {
+		t.Fatalf("expected pending invite for future@example.com, got %+v", member)
+	}
+
+	// The invite is visible to the owner as pending.
+	rec = do(h, ownerCookie, http.MethodGet, "/api/projects/"+project.ID+"/members", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list members: %d %s", rec.Code, rec.Body.String())
+	}
+	var members []db.ProjectMember
+	_ = json.Unmarshal(rec.Body.Bytes(), &members)
+	if len(members) != 1 || !members[0].Pending {
+		t.Fatalf("expected one pending member, got %+v", members)
+	}
+
+	// The invited person signs up; signup issues a session cookie.
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/signup",
+		strings.NewReader(`{"email":"future@example.com","password":"secret123","name":"Future"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("signup: %d %s", rec.Code, rec.Body.String())
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("no session cookie issued on signup")
+	}
+	memberCookie := cookies[0]
+
+	// The previously pending membership now grants the new account access.
+	rec = do(h, memberCookie, http.MethodGet, "/api/projects", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list projects: %d %s", rec.Code, rec.Body.String())
+	}
+	var projects []db.Project
+	_ = json.Unmarshal(rec.Body.Bytes(), &projects)
+	if len(projects) != 1 || projects[0].ID != project.ID || projects[0].Role != "viewer" {
+		t.Fatalf("expected shared project with viewer role, got %+v", projects)
+	}
+	if rec := do(h, memberCookie, http.MethodGet, "/api/projects/"+project.ID, ""); rec.Code != http.StatusOK {
+		t.Fatalf("viewer get project: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// The membership is no longer pending, and only the owner may manage it.
+	rec = do(h, ownerCookie, http.MethodGet, "/api/projects/"+project.ID+"/members", "")
+	_ = json.Unmarshal(rec.Body.Bytes(), &members)
+	if len(members) != 1 || members[0].Pending {
+		t.Fatalf("expected resolved member, got %+v", members)
+	}
+	if rec := do(h, memberCookie, http.MethodGet, "/api/projects/"+project.ID+"/members", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("viewer list members: expected 404, got %d", rec.Code)
+	}
+
+	// Revoking by email removes access, including pending invites.
+	rec = do(h, ownerCookie, http.MethodDelete,
+		"/api/projects/"+project.ID+"/members/future%40example.com", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("remove member: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = do(h, memberCookie, http.MethodGet, "/api/projects", "")
+	_ = json.Unmarshal(rec.Body.Bytes(), &projects)
+	if len(projects) != 0 {
+		t.Fatalf("expected access revoked, got %+v", projects)
+	}
+}
+
+func TestStateChangingRequestsRejectCrossOrigin(t *testing.T) {
+	_, h, cookie := newTestServer(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"name":"X"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "https://evil.example.com")
+	req.AddCookie(cookie)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin POST: expected 403, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Same-origin mutations (matching Origin) are still allowed.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"name":"X"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://"+req.Host)
+	req.AddCookie(cookie)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("same-origin POST: expected 201, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// A different port on the same host (dev proxy rewriting Host to :8088
+	// while the browser's Origin keeps :5174) is still same-site and allowed.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"name":"Y"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://localhost:5174")
+	req.Host = "localhost:8088"
+	req.AddCookie(cookie)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("same-host different-port POST: expected 201, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSignupRejectsOversizedPassword(t *testing.T) {
+	_, h, _ := newTestServer(t)
+
+	long := strings.Repeat("a", 73)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/signup",
+		strings.NewReader(`{"email":"long@example.com","password":"`+long+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized password signup: expected 400, got %d %s", rec.Code, rec.Body.String())
+	}
+}

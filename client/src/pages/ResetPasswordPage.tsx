@@ -1,18 +1,11 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Link, useSearchParams } from 'react-router-dom';
-import {
-  Box,
-  Button,
-  Card,
-  CardContent,
-  Typography,
-  TextField,
-  Stack,
-  Alert,
-} from '@mui/material';
+import { Box, Button, Card, CardContent, Typography, TextField, Stack, Alert } from '@mui/material';
 import { api } from '../api/client';
 
 export default function ResetPasswordPage() {
+  const { t } = useTranslation();
   const [searchParams] = useSearchParams();
   const token = searchParams.get('token') ?? '';
   const [password, setPassword] = useState('');
@@ -24,15 +17,15 @@ export default function ResetPasswordPage() {
   const submit = async () => {
     setError('');
     if (password.length < 6) {
-      setError('Password must be at least 6 characters.');
+      setError(t('reset.passwordTooShort'));
       return;
     }
     if (password !== confirm) {
-      setError('Passwords do not match.');
+      setError(t('reset.passwordsDoNotMatch'));
       return;
     }
     if (!token) {
-      setError('Missing or invalid reset link.');
+      setError(t('reset.missingToken'));
       return;
     }
     setBusy(true);
@@ -40,7 +33,7 @@ export default function ResetPasswordPage() {
       await api.resetPassword(token, password);
       setDone(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong');
+      setError(e instanceof Error ? e.message : t('auth.somethingWentWrong'));
     } finally {
       setBusy(false);
     }
@@ -60,14 +53,14 @@ export default function ResetPasswordPage() {
             UXer
           </Typography>
           <Typography color="text.secondary" sx={{ mb: 3 }}>
-            Choose a new password.
+            {t('reset.subtitle')}
           </Typography>
 
           {done ? (
             <Stack spacing={2}>
-              <Alert severity="success">Your password has been reset.</Alert>
+              <Alert severity="success">{t('reset.success')}</Alert>
               <Button component={Link} to="/login" variant="contained" fullWidth>
-                Sign in
+                {t('auth.signIn')}
               </Button>
             </Stack>
           ) : (
@@ -79,7 +72,7 @@ export default function ResetPasswordPage() {
               )}
               <Stack spacing={2}>
                 <TextField
-                  label="New password"
+                  label={t('reset.newPassword')}
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -87,7 +80,7 @@ export default function ResetPasswordPage() {
                   autoComplete="new-password"
                 />
                 <TextField
-                  label="Confirm new password"
+                  label={t('reset.confirmNewPassword')}
                   type="password"
                   value={confirm}
                   onChange={(e) => setConfirm(e.target.value)}
@@ -98,7 +91,7 @@ export default function ResetPasswordPage() {
                   }}
                 />
                 <Button variant="contained" size="large" onClick={submit} disabled={busy} fullWidth>
-                  Reset password
+                  {t('reset.resetPassword')}
                 </Button>
               </Stack>
             </>

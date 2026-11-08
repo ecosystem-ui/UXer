@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+client/node_modules/
+
+# Build outputs (rebuilt inside container)
+client/dist/
+server/bin/
+server/uxer
+
+# Local data & secrets
+.env
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Tests & tooling
+e2e/
+test-results/
+playwright-report/
+playwright/.cache/
+playwright.config.ts
+package.json
+package-lock.json
+
+# Git
+.git/
+.gitignore
+
+# OS
+.DS_Store
+
+# Container files (don't recurse into themselves)
+Containerfile
+compose.yml
+.containerignore

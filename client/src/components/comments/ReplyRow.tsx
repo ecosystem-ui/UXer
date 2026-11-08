@@ -1,4 +1,5 @@
 import { Box, Avatar, Typography } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import type { Reply } from '../../api/types';
 import { useThemeMode } from '../../theme/ThemeModeContext';
 import { displayName, userColor, timeAgo } from './utils';
@@ -8,8 +9,9 @@ export interface ReplyRowProps {
 }
 
 export default function ReplyRow({ reply }: ReplyRowProps) {
+  const { t } = useTranslation();
   const { tokens } = useThemeMode();
-  const name = displayName(reply);
+  const name = displayName(t, reply);
   return (
     <Box className="reply-row" sx={{ position: 'relative', display: 'flex', gap: 1.25 }}>
       <Avatar
@@ -42,7 +44,7 @@ export default function ReplyRow({ reply }: ReplyRowProps) {
             {name}
           </Typography>
           <Typography variant="caption" color="text.secondary">
-            {timeAgo(reply.created_at)}
+            {timeAgo(t, reply.created_at)}
           </Typography>
         </Box>
         <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>

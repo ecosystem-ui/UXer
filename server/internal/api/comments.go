@@ -3,9 +3,12 @@ package api
 import (
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"uxer/internal/db"
 )
+
+const maxMessageLength = 500
 
 func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 	versionID := r.PathValue("id")
@@ -125,6 +128,10 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "body is required")
 		return
 	}
+	if utf8.RuneCountInString(strings.TrimSpace(body.Body)) > maxMessageLength {
+		writeError(w, http.StatusBadRequest, "body must be 500 characters or fewer")
+		return
+	}
 
 	id := db.NewID()
 	ts := now()
@@ -137,7 +144,12 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, s.loadComment(id, u))
+	created := s.loadComment(id, u)
+	if created == nil {
+		writeError(w, http.StatusInternalServerError, "create failed")
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
 }
 
 func (s *Server) handleCreateReply(w http.ResponseWriter, r *http.Request) {
@@ -160,6 +172,10 @@ func (s *Server) handleCreateReply(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "body is required")
 		return
 	}
+	if utf8.RuneCountInString(strings.TrimSpace(body.Body)) > maxMessageLength {
+		writeError(w, http.StatusBadRequest, "body must be 500 characters or fewer")
+		return
+	}
 
 	id := db.NewID()
 	ts := now()
@@ -172,7 +188,7 @@ func (s *Server) handleCreateReply(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, db.Reply{
-		ID: id, CommentID: c.ID, AuthorID: u.ID, Author: u, Body: body.Body, CreatedAt: ts,
+		ID: id, CommentID: c.ID, AuthorID: u.ID, Author: u, Body: strings.TrimSpace(body.Body), CreatedAt: ts,
 	})
 }
 

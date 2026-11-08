@@ -13,11 +13,12 @@ the tests live in this directory.
 ```
 e2e/
 ├── helpers.ts              # shared UI/API helpers and test users
-├── auth.spec.ts            # signup, logout, login, wrong-password rejection
-├── projects.spec.ts        # create project + persona, share a project
+├── auth.spec.ts            # signup, logout, login, shared-link return, wrong password
+├── projects.spec.ts        # create project + persona, share from project/persona pages, invite before signup
 ├── collaboration.spec.ts   # three users collaborating across two projects
 ├── comment-routing.spec.ts # comments in the proxied iframe + fallback guidance
 ├── view-routing.spec.ts    # same-URL subview replay (VM detail / wizard open+close)
+├── view-state.spec.ts      # grid/list layout state (capture, replay, legacy fallback)
 └── README.md               # this file
 ```
 
@@ -45,9 +46,10 @@ several specs sign up the same user accounts against the shared DB.
 - Client dependencies installed: `cd client && npm install`.
 - Playwright package installed at the repo root: `npm install`.
 - A Playwright Chromium install: `npm run test:e2e:install`.
-- **Outbound network access** to `https://osac-project.github.io/osac-ux/`
-  (the sample design URL). Only `comment-routing.spec.ts` actually loads the
-  proxied design; `auth`/`projects`/`collaboration` don't require it.
+- **Outbound network access** to `https://osac-project.github.io/osac-ux/` and
+  `https://heyethankim.github.io/osac-bmaas/` (the sample design URLs). Only
+  `comment-routing`, `view-routing`, and `view-state` actually load the proxied
+  design; `auth`/`projects`/`collaboration` don't require it.
 
 ## Setup (one time)
 

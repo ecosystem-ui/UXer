@@ -46,6 +46,10 @@
     { key: 'step', selector: '.pf-v6-c-wizard__nav-link, .pf-v5-c-wizard__nav-link', value: 'wizard-step' },
     { key: 'nav', selector: '.pf-v6-c-nav__link.pf-m-current, .pf-v5-c-nav__link.pf-m-current, .pf-v6-c-nav__link[aria-current="page"], .pf-v5-c-nav__link[aria-current="page"]', value: 'text' },
     { key: 'tab', selector: '.pf-v6-c-tabs__item.pf-m-current .pf-v6-c-tabs__item-text, .pf-v5-c-tabs__item.pf-m-current .pf-v5-c-tabs__item-text', value: 'text' },
+    // Grid/list (or icon) layout switch on collection pages, e.g. the
+    // bare-metal instance list. Selectors captured in one layout don't resolve
+    // in the other, so the active layout is part of the replayable state.
+    { key: 'view', selector: '.pf-v6-c-toggle-group__button[aria-pressed="true"], .pf-v5-c-toggle-group__button[aria-pressed="true"]', value: 'attr:aria-label' },
     // Selected virtual machine in the VM-detail subview. Scoped to the active
     // view so the key only contributes while the detail is actually open.
     { key: 'vm', selector: '#view-vm.pf-m-active .ethan-detail-header__title', value: 'text' },
@@ -75,6 +79,12 @@
       call: 'openWizard',
       args: ['template'],
       close: { selector: '#wiz-close' }
+    },
+    {
+      key: 'view',
+      selector: '.pf-v6-c-toggle-group__button, .pf-v5-c-toggle-group__button',
+      value: 'attr:aria-label',
+      action: 'click'
     }
   ];
 
@@ -675,6 +685,19 @@
     return null;
   }
 
+  // A pin recorded before a control existed (e.g. the `view` layout switch)
+  // has a shorter state key than the page reports now. Match on the keys the
+  // comment actually recorded so those pins stay visible instead of vanishing.
+  function pinStateMatches(pinState, currentState) {
+    if (!pinState || !currentState || pinState === currentState) return true;
+    var recorded = parseState(pinState);
+    var current = parseState(currentState);
+    for (var key in recorded) {
+      if (current[key] !== recorded[key]) return false;
+    }
+    return true;
+  }
+
   function renderPins() {
     if (!mountOverlay()) return;
     pinsLayer.innerHTML = '';
@@ -691,7 +714,7 @@
       // Only render pins whose recorded view state matches the current one.
       // The pending (focused) pin is exempt so it stays visible while the
       // page hasn't reached its state yet.
-      if (p.state && st.key && p.state !== st.key && !isPending) continue;
+      if (p.state && st.key && !isPending && !pinStateMatches(p.state, st.key)) continue;
       var el = findElement(p.selector);
       if (!el) {
         // Element not rendered (e.g. collapsed accordion): keep a fallback
@@ -872,12 +895,14 @@
     return closed;
   }
 
-  function focusSelector(selector, retries, persist) {
+  function focusSelector(selector, retries, persist, onMissing) {
     if (typeof retries !== 'number') retries = 0;
     var el = findElement(selector);
     if (!el) {
       if (retries > 0) {
-        setTimeout(function () { focusSelector(selector, retries - 1, persist); }, 150);
+        setTimeout(function () { focusSelector(selector, retries - 1, persist, onMissing); }, 150);
+      } else if (typeof onMissing === 'function') {
+        onMissing();
       }
       return;
     }
@@ -885,7 +910,7 @@
     // comment actually becomes visible.
     if (!isInsideOpenModal(el) && closeOpenModals()) {
       if (retries > 0) {
-        setTimeout(function () { focusSelector(selector, retries - 1, persist); }, 150);
+        setTimeout(function () { focusSelector(selector, retries - 1, persist, onMissing); }, 150);
       }
       return;
     }
@@ -988,7 +1013,8 @@
       var current = control ? controlValue(control) : '';
       if (target != null) {
         if (current !== target) todo.push({ type: 'open', entry: entry, value: target });
-      } else if (current) {
+      } else if (current && entry.close) {
+        // Nothing to close unless the reveal rule says how to leave the view.
         todo.push({ type: 'close', entry: entry });
       }
     }
@@ -1029,14 +1055,92 @@
     }
   }
 
+  // Comments captured before the `view` state key existed don't record the
+  // grid/list layout, yet their structural selector only resolves in one of
+  // them. When the element can't be found in the current layout, try the
+  // other layout(s) and keep the first one where it resolves; otherwise
+  // restore the layout the page was in.
+  function viewFallback(selector, done) {
+    if (findElement(selector)) { done(false); return; }
+
+    var control = null;
+    var controls = activeControls() || [];
+    for (var i = 0; i < controls.length; i++) {
+      if (controls[i].key === 'view') { control = controls[i]; break; }
+    }
+    var reveal = null;
+    var revealRules = activeReveal();
+    for (var j = 0; j < revealRules.length; j++) {
+      if (revealRules[j].key === 'view') { reveal = revealRules[j]; break; }
+    }
+    if (!control || !reveal || !reveal.selector) { done(false); return; }
+
+    function candidates() {
+      try { return Array.prototype.slice.call(document.querySelectorAll(reveal.selector)); }
+      catch (e) { return []; }
+    }
+    function valueOf(el) { return readValue(el, reveal.value || 'text'); }
+    function clickValue(value) {
+      var els = candidates();
+      for (var k = 0; k < els.length; k++) {
+        if (!els[k].disabled && valueOf(els[k]) === value) { els[k].click(); return true; }
+      }
+      return false;
+    }
+
+    var original = controlValue(control);
+    var alts = [];
+    var els = candidates();
+    for (var m = 0; m < els.length; m++) {
+      var v = valueOf(els[m]);
+      if (!v || v === original || els[m].disabled || alts.indexOf(v) !== -1) continue;
+      alts.push(v);
+    }
+    if (!alts.length) { done(false); return; }
+
+    var idx = 0;
+    function waitForTarget(tries, cb) {
+      if (findElement(selector)) { cb(true); return; }
+      if (tries <= 0) { cb(false); return; }
+      setTimeout(function () { waitForTarget(tries - 1, cb); }, 150);
+    }
+    function tryNext() {
+      if (idx >= alts.length) {
+        if (original) clickValue(original);
+        setTimeout(function () { done(false); }, 200);
+        return;
+      }
+      if (!clickValue(alts[idx++])) { tryNext(); return; }
+      // Let the framework re-render before deciding this layout doesn't work.
+      waitForTarget(8, function (found) {
+        if (found) done(true);
+        else tryNext();
+      });
+    }
+    tryNext();
+  }
+
+  // Focus with a short retry budget first; if the element never shows up, try
+  // the alternate layout(s) before spending the rest of the budget.
+  function focusWithFallback(selector, retries, persist) {
+    if (typeof retries !== 'number') retries = 0;
+    var first = Math.min(retries, 8);
+    focusSelector(selector, first, persist, function () {
+      viewFallback(selector, function (switched) {
+        if (switched) focusSelector(selector, 20, persist);
+        else focusSelector(selector, Math.max(0, retries - first), persist);
+      });
+    });
+  }
+
   function stepLoop(selector, step, retries, persist, id) {
     if (!step) {
-      focusSelector(selector, retries, persist);
+      focusWithFallback(selector, retries, persist);
       return;
     }
 
     if (currentStepKey() === step) {
-      focusSelector(selector, 30, persist);
+      focusWithFallback(selector, 30, persist);
       return;
     }
 
@@ -1044,7 +1148,7 @@
       if (retries > 0) {
         setTimeout(function () { stepLoop(selector, step, retries - 1, persist, id); }, 250);
       } else {
-        focusSelector(selector, 10, persist);
+        focusWithFallback(selector, 10, persist);
       }
     }
 

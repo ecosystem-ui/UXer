@@ -1,7 +1,9 @@
 import { useState, ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import {
   AppBar,
+  Box,
   Toolbar,
   Typography,
   IconButton,
@@ -14,12 +16,14 @@ import {
 import LogoutIcon from '@mui/icons-material/Logout';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
+import LanguageToggle from './LanguageToggle';
 import { useAuth } from '../auth/AuthContext';
 import { useThemeMode } from '../theme/ThemeModeContext';
 
 export default function Layout({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
   const { user, logout } = useAuth();
-  const { mode, toggle } = useThemeMode();
+  const { mode, toggle, tokens } = useThemeMode();
   const navigate = useNavigate();
   const [anchor, setAnchor] = useState<null | HTMLElement>(null);
 
@@ -32,16 +36,17 @@ export default function Layout({ children }: { children: ReactNode }) {
         sx={{ borderBottom: '1px solid', borderColor: 'divider' }}
       >
         <Toolbar sx={{ minHeight: { xs: 60, md: 82 }, px: { xs: 2, md: 3 } }}>
-          <Typography
-            variant="h6"
-            fontWeight={700}
-            sx={{ flexGrow: 1, cursor: 'pointer', color: 'primary.main' }}
-            onClick={() => navigate('/')}
-          >
-            UXer
-          </Typography>
-          <Tooltip title={mode === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}>
-            <IconButton onClick={toggle} aria-label="Toggle color theme">
+          <Box sx={{ flexGrow: 1, cursor: 'pointer' }} onClick={() => navigate('/')}>
+            <Typography variant="h4" fontWeight={900} sx={{ color: 'primary.main' }}>
+              <span style={{ color: tokens.foreground }}>UX</span>er
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {t('app.tagline')}
+            </Typography>
+          </Box>
+          <LanguageToggle />
+          <Tooltip title={mode === 'dark' ? t('layout.switchToLight') : t('layout.switchToDark')}>
+            <IconButton onClick={toggle} aria-label={t('layout.toggleColorTheme')}>
               {mode === 'dark' ? <LightModeIcon /> : <DarkModeIcon />}
             </IconButton>
           </Tooltip>
@@ -69,7 +74,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                   <ListItemIcon>
                     <LogoutIcon fontSize="small" />
                   </ListItemIcon>
-                  Log out
+                  {t('layout.logOut')}
                 </MenuItem>
               </Menu>
             </>

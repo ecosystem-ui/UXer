@@ -3,7 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"uxer/internal/auth"
@@ -67,7 +70,7 @@ func (s *Server) Routes(static http.Handler) http.Handler {
 	// project members (sharing)
 	mux.HandleFunc("GET /api/projects/{id}/members", s.requireUser(s.handleListMembers))
 	mux.HandleFunc("POST /api/projects/{id}/members", s.requireUser(s.handleAddMember))
-	mux.HandleFunc("DELETE /api/projects/{id}/members/{userId}", s.requireUser(s.handleRemoveMember))
+	mux.HandleFunc("DELETE /api/projects/{id}/members/{email}", s.requireUser(s.handleRemoveMember))
 
 	// versions
 	mux.HandleFunc("GET /api/projects/{id}/versions", s.requireUser(s.handleListVersions))
@@ -99,6 +102,15 @@ func (s *Server) Routes(static http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if origin, ok := s.Proxy.OriginFromHost(r.Host); ok {
 			s.Proxy.HandleOrigin(w, r, origin)
+			return
+		}
+		// Defense in depth against cross-site request forgery: reject
+		// state-changing API requests whose Origin header names a different
+		// host. Cookie auth relies on SameSite=Lax, but the proxied persona
+		// pages live on subdomains of this host (same-site), so an explicit
+		// Origin check closes the remaining gap.
+		if isStateChanging(r.Method) && strings.HasPrefix(r.URL.Path, "/api/") && !sameOriginRequest(r) {
+			writeError(w, http.StatusForbidden, "cross-origin request rejected")
 			return
 		}
 		mux.ServeHTTP(w, r)
@@ -154,8 +166,8 @@ func (s *Server) loadUser(id string) (*db.User, error) {
 }
 
 // projectRole returns the current user's role on a project: "owner",
-// "viewer", or "" when the user has no access. A single query resolves both
-// the owner and member cases.
+// "viewer", or "" when the user has no access. Memberships are keyed by the
+// user's email, so an invitation made before signup applies automatically.
 func (s *Server) projectRole(r *http.Request, id string) string {
 	u := userFrom(r)
 	var role string
@@ -163,9 +175,9 @@ func (s *Server) projectRole(r *http.Request, id string) string {
 		`SELECT CASE
 			WHEN p.owner_id = ? THEN 'owner'
 			ELSE COALESCE((SELECT m.role FROM project_members m
-			               WHERE m.project_id = p.id AND m.user_id = ?), '')
+			               WHERE m.project_id = p.id AND m.email = ?), '')
 		 END
-		 FROM projects p WHERE p.id = ?`, u.ID, u.ID, id,
+		 FROM projects p WHERE p.id = ?`, u.ID, normalizeEmail(u.Email), id,
 	).Scan(&role)
 	if err != nil {
 		return ""
@@ -198,8 +210,8 @@ func (s *Server) versionFor(r *http.Request, id string, ownerOnly bool) (*db.Ver
 		 WHERE v.id = ? AND (p.owner_id = ?`
 	args := []any{id, u.ID}
 	if !ownerOnly {
-		q += ` OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = v.project_id AND m.user_id = ?)`
-		args = append(args, u.ID)
+		q += ` OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = v.project_id AND m.email = ?)`
+		args = append(args, normalizeEmail(u.Email))
 	}
 	q += `)`
 	err := s.DB.SQL.QueryRow(q, args...).Scan(&v.ID, &v.ProjectID, &v.Label, &v.URL, &v.Seq, &v.CreatedAt)
@@ -222,8 +234,8 @@ func (s *Server) commentFor(r *http.Request, id string, ownerOnly bool) (*db.Com
 		 WHERE c.id = ? AND (p.owner_id = ?`
 	args := []any{id, u.ID}
 	if !ownerOnly {
-		q += ` OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = v.project_id AND m.user_id = ?)`
-		args = append(args, u.ID)
+		q += ` OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = v.project_id AND m.email = ?)`
+		args = append(args, normalizeEmail(u.Email))
 	}
 	q += `)`
 	err := s.DB.SQL.QueryRow(q, args...).Scan(
@@ -234,6 +246,14 @@ func (s *Server) commentFor(r *http.Request, id string, ownerOnly bool) (*db.Com
 		return nil, false
 	}
 	return &c, true
+}
+
+// SetAuthRateLimit overrides the per-minute auth request budget (per client
+// IP). Non-positive values are ignored.
+func (s *Server) SetAuthRateLimit(max int) {
+	if max > 0 {
+		s.authLimiter = newRateLimiter(time.Minute, max)
+	}
 }
 
 // rateLimit throttles per-IP requests to sensitive endpoints (auth).
@@ -268,4 +288,44 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// isStateChanging reports whether method mutates server state.
+func isStateChanging(method string) bool {
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
+}
+
+// sameOriginRequest verifies that a browser-supplied Origin header (when
+// present) matches the request host. Requests without an Origin header (curl,
+// same-origin navigation, some API clients) are allowed through: this guard
+// only blocks browser cross-origin mutations, which always carry Origin.
+//
+// Only the hostnames are compared (ports are ignored): a different port on the
+// same host is the same site and is not a CSRF vector. This keeps the check
+// working when a dev server (e.g. Vite on :5174) rewrites the Host header to
+// the backend port (e.g. :8088) while forwarding the browser's Origin.
+func sameOriginRequest(r *http.Request) bool {
+	raw := r.Header.Get("Origin")
+	if raw == "" {
+		return true
+	}
+	origin, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(origin.Hostname(), requestHostname(r))
+}
+
+// requestHostname returns r.Host without the port, falling back to r.Host when
+// no port is present.
+func requestHostname(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.Host); err == nil {
+		return host
+	}
+	return r.Host
 }

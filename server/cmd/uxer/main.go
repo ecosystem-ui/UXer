@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -47,6 +48,7 @@ func main() {
 
 	apiSrv := api.NewServer(database, mgr, px, m)
 	apiSrv.AppURL = mailCfg.AppURL
+	apiSrv.SetAuthRateLimit(getenvInt("UXER_AUTH_RATE_LIMIT", 20))
 
 	var static http.Handler
 	if info, statErr := os.Stat(distDir); statErr == nil && info.IsDir() {
@@ -130,6 +132,14 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func getenvInt(key string, fallback int) int {
+	v, err := strconv.Atoi(os.Getenv(key))
+	if err != nil || v <= 0 {
+		return fallback
+	}
+	return v
 }
 
 // loadDotEnv reads a `.env` file from the working directory if present,
