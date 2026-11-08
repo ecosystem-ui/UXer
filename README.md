@@ -1,5 +1,7 @@
 # UXer — Design Review & Version Management
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 UXer lets UX designers manage **projects**, define **versions** (a label + a public
 design URL), preview that URL in an iframe, drop comments anchored to DOM
 elements, run discussion threads, and resolve comments against a version.
@@ -8,6 +10,19 @@ elements, run discussion threads, and resolve comments against a version.
 - **Backend**: Go (`net/http`), SQLite (`modernc.org/sqlite`), email + password auth (bcrypt)
 - **Preview**: a reverse proxy that rewrites the design URL into an
   iframe-embeddable page and injects an annotation bridge
+
+## Screenshots
+
+
+**Project Personas**
+
+![Project versions](docs/screenshots/project-versions.png)
+
+![Design preview — empty comments state](docs/screenshots/preview-empty.png)
+
+**Comment thread detail**
+
+![Comment thread detail](docs/screenshots/comment-thread.png)
 
 ## Layout
 
